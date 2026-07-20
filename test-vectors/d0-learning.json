@@ -1,0 +1,141 @@
+{
+  "vectorVersion": 1,
+  "mobileLearningContractVersion": 1,
+  "dictionary": {
+    "datasetRevision": "d0-fixture-2026-07-12",
+    "profile": "standard-v1",
+    "resourceSchemaVersion": 4,
+    "lexemeMapHash": "f0dc9464431b91d6a9250f829c9acfe218947cd671fc6aff4fde57e3ba8a5cd5",
+    "entries": [
+      {
+        "lexemeId": 1,
+        "lexemeKey": "lex_en_bef0f93b22ad080a29e3aa86",
+        "lemma": "run",
+        "phonetic": "rʌn",
+        "translation": "v. 跑；运行",
+        "tag": "gk cet4",
+        "forms": ["ran", "running"]
+      },
+      {
+        "lexemeId": 2,
+        "lexemeKey": "lex_en_06d8c329b983821e56d2e2bc",
+        "lemma": "see",
+        "phonetic": "siː",
+        "translation": "v. 看见；理解",
+        "tag": "gk cet4",
+        "forms": ["saw", "seen"]
+      },
+      {
+        "lexemeId": 3,
+        "lexemeKey": "lex_en_bbbb8466b09bf71e0c4f5da6",
+        "lemma": "saw",
+        "phonetic": "sɔː",
+        "translation": "n. 锯；v. 锯",
+        "tag": "cet4",
+        "forms": []
+      }
+    ],
+    "resolutionCases": [
+      {
+        "surface": "running",
+        "candidateKeys": ["lex_en_bef0f93b22ad080a29e3aa86"]
+      },
+      {
+        "surface": "saw",
+        "candidateKeys": [
+          "lex_en_bbbb8466b09bf71e0c4f5da6",
+          "lex_en_06d8c329b983821e56d2e2bc"
+        ]
+      },
+      {
+        "surface": "unlisted",
+        "candidateKeys": []
+      }
+    ]
+  },
+  "study": {
+    "timezone": "Asia/Shanghai",
+    "reviewedAt": "2026-07-12T02:00:00.000Z",
+    "commandId": "00000000-0000-4000-8000-000000000301",
+    "expectedVersion": 3,
+    "answer": "known",
+    "preferences": {
+      "cutoffHour": 4,
+      "requestRetention": 0.9,
+      "maximumInterval": 36500,
+      "queueOrder": "mixed"
+    },
+    "reviewProposal": {
+      "contractVersion": 1,
+      "engineVersion": "fsrs-6/ts-fsrs-5.4.1/mobile-v1",
+      "expectedVersion": 3,
+      "commandId": "00000000-0000-4000-8000-000000000301",
+      "answer": "known",
+      "reviewedAt": "2026-07-12T02:00:00.000Z",
+      "beforeFingerprint": "9e80ba25cbd874acc427b2e7f5e466d6fa89b968582f31d2ad15d58a7f979dd7",
+      "parametersFingerprint": "10eb275fcf9519dc31d29c31fbe577c6c758523d601dee62e6bed318ba332856",
+      "before": {
+        "dueAt": "2026-07-12T02:00:00.000Z",
+        "stability": 0,
+        "difficulty": 0,
+        "elapsedDays": 0,
+        "scheduledDays": 0,
+        "learningSteps": 0,
+        "reps": 0,
+        "lapses": 0,
+        "state": 0,
+        "lastReviewAt": null
+      },
+      "after": {
+        "dueAt": "2026-07-14T20:00:00.000Z",
+        "stability": 2.3065,
+        "difficulty": 2.11810397,
+        "elapsedDays": 0,
+        "scheduledDays": 3,
+        "learningSteps": 0,
+        "reps": 1,
+        "lapses": 0,
+        "state": 2,
+        "lastReviewAt": "2026-07-12T02:00:00.000Z"
+      },
+      "rating": 3,
+      "log": {
+        "rating": 3,
+        "state": 0,
+        "due": "2026-07-14T20:00:00.000Z",
+        "stability": 0,
+        "difficulty": 0,
+        "elapsed_days": 0,
+        "last_elapsed_days": 0,
+        "scheduled_days": 0,
+        "learning_steps": 0,
+        "review": "2026-07-12T02:00:00.000Z",
+        "due_aligned_to_learning_day": true
+      }
+    },
+    "queue": {
+      "seed": "2026-07-12:plan_fixture",
+      "reviews": ["review-a", "review-b", "review-c"],
+      "newWords": ["new-a", "new-b"],
+      "expectedMixed": ["review-a", "review-b", "new-a", "review-c", "new-b"],
+      "inputFingerprint": "095980aebe6e8ac0a68fd311457a9d70974c6a0e952b970f58d5671c6305d0a8"
+    },
+    "reinforcement": [
+      {
+        "answer": "unknown",
+        "before": { "hadFailure": false, "consecutiveKnown": 0 },
+        "after": { "completed": false, "hadFailure": true, "consecutiveKnown": 0, "revealed": true }
+      },
+      {
+        "answer": "known",
+        "before": { "hadFailure": true, "consecutiveKnown": 0 },
+        "after": { "completed": false, "hadFailure": true, "consecutiveKnown": 1, "revealed": false }
+      },
+      {
+        "answer": "known",
+        "before": { "hadFailure": true, "consecutiveKnown": 1 },
+        "after": { "completed": true, "hadFailure": true, "consecutiveKnown": 2, "revealed": false }
+      }
+    ]
+  }
+}

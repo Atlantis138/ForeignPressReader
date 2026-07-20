@@ -1,0 +1,37 @@
+{
+  "vectorVersion": 2,
+  "planVector": "epub-content-v2.json",
+  "assetFixtureHex": "ffd8ffd9",
+  "expectedPlanJsonSize": 2239,
+  "expectedPlanJsonSha256": "ee5b513d9dd52e2e5afa8209331100c00be5b9b7f37ef39c12ed1c4a1b121ccf",
+  "expectedManifest": {
+    "format": "foreign-press-reader-publication",
+    "formatVersion": 2,
+    "contentIdVersion": 2,
+    "publicationId": "pub_6717464f151718094a4a1266",
+    "sourceFormat": "epub",
+    "sourceContentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "firstImportedAt": "2026-07-01T08:30:00.000Z",
+    "planPath": "publication.json",
+    "files": [
+      {
+        "path": "publication.json",
+        "size": 2239,
+        "sha256": "ee5b513d9dd52e2e5afa8209331100c00be5b9b7f37ef39c12ed1c4a1b121ccf",
+        "kind": "plan"
+      },
+      {
+        "path": "assets/EPUB/images/cover.jpg",
+        "size": 4,
+        "sha256": "32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af",
+        "kind": "asset"
+      },
+      {
+        "path": "assets/EPUB/images/photo.jpg",
+        "size": 4,
+        "sha256": "32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af",
+        "kind": "asset"
+      }
+    ]
+  }
+}

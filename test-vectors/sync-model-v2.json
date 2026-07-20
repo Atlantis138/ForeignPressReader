@@ -1,0 +1,42 @@
+{
+  "vectorVersion": 1,
+  "expectedStablePayloadSha256": "decc16e748372d3ed181c1cdb7e69b42ac48f1a37ed6f08ab9bd4e70e43619b2",
+  "batch": {
+    "modelVersion": 2,
+    "batchId": "batch-publication-package-v2",
+    "senderDeviceId": "device-windows",
+    "recipientDeviceId": "device-android",
+    "createdAt": "2026-07-15T00:00:00.000Z",
+    "mode": "snapshot",
+    "fromSenderRevisionExclusive": null,
+    "senderRevision": 1,
+    "inspectedPeerRevision": null,
+    "records": [
+      {
+        "type": "publication-lifecycle",
+        "key": "pub_6717464f151718094a4a1266",
+        "revision": 1,
+        "value": {
+          "publicationId": "pub_6717464f151718094a4a1266",
+          "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "formatId": "epub",
+          "title": "Synthetic Weekly",
+          "state": "present",
+          "changedAt": "2026-07-15T00:00:00.000Z",
+          "deviceId": "device-windows"
+        }
+      }
+    ],
+    "blobs": [
+      {
+        "kind": "publication-package",
+        "publicationId": "pub_6717464f151718094a4a1266",
+        "formatId": "epub",
+        "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "byteLength": 4096,
+        "mediaType": "application/vnd.foreign-press-reader.publication+zip"
+      }
+    ]
+  }
+}

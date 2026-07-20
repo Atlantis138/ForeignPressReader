@@ -1,0 +1,12 @@
+{
+  "vectorVersion": 1,
+  "lexemeKey": "lex_en_bef0f93b22ad080a29e3aa86",
+  "publicationId": "publication_fixture",
+  "articleId": "article_fixture",
+  "blockId": "block_fixture",
+  "tokenIndex": 4,
+  "sentence": "Running is useful.",
+  "sentenceHash": "7eacf2673985aaf04dcb27e28a649a49f96dd08eea939f1163a348177c71f817",
+  "sourceId": "1611ea1daa35a58055fc2c502344185e3556b3dc14e9517f6f33e1ac5715d1be",
+  "contextId": "35ebd503e65fc89e6865c463f701e667554730746307694def0ec0ca80f4f600"
+}

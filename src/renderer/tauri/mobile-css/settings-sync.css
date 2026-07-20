@@ -1,0 +1,689 @@
+/* Settings, storage, developer, and local sync surfaces */
+
+.settings-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0,1fr) 22px;
+  width: 100%;
+  min-height: 72px;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 10px 14px;
+  text-align: left;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--shadow-card);
+}
+
+.settings-row-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.settings-row-icon svg {
+  width: 21px;
+  height: 21px;
+}
+
+.settings-row > span:nth-child(2) b,
+.settings-row > span:nth-child(2) small {
+  display: block;
+}
+
+.settings-row small {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.settings-row > svg {
+  width: 21px;
+  height: 21px;
+  color: var(--muted);
+}
+
+.mobile-app-shell .settings-row + .settings-row {
+  border-top: 1px solid var(--line);
+}
+
+.mobile-app-shell .settings-row > svg {
+  grid-column: 4;
+  width: 17px;
+  height: 17px;
+}
+
+.mobile-app-shell .settings-section-page .mobile-page-header,
+.mobile-app-shell .appearance-settings-page .mobile-page-header {
+  padding-top: 8px;
+}
+
+.mobile-app-shell .settings-status-card h2 {
+  margin: 10px 0 6px;
+  font: 700 1.25rem var(--font-editorial);
+}
+
+.mobile-app-shell .settings-status-card p {
+  color: var(--muted);
+  font-size: .8125rem;
+  line-height: 1.55;
+}
+
+.mobile-app-shell .settings-status-card .mobile-button {
+  margin-top: 8px;
+}
+
+.mobile-app-shell .settings-status-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mobile-app-shell .settings-status-card dl {
+  margin: 14px 0 0;
+}
+
+.mobile-app-shell .settings-status-card dl div {
+  padding: 9px 0;
+  font-size: .75rem;
+}
+
+.mobile-app-shell .mobile-service-heading code {
+  background: var(--surface-strong);
+  border-radius: .5rem;
+  padding: .45rem .6rem;
+}
+
+.mobile-app-shell .mobile-service-grid {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: .8rem;
+}
+
+.mobile-app-shell .mobile-service-card input[type="range"] {
+  min-height: 2rem;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.mobile-app-shell .mobile-toggle-row {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding-top: .8rem;
+}
+
+.mobile-app-shell .mobile-toggle-row input {
+  width: 1.25rem;
+  min-height: 1.25rem;
+  accent-color: var(--accent);
+}
+
+.mobile-app-shell .mobile-toggle-row span {
+  display: grid;
+  gap: .2rem;
+  color: var(--ink);
+}
+
+.mobile-app-shell .mobile-toggle-row small {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.mobile-app-shell .mobile-key-mask {
+  justify-self: stretch;
+  border-radius: .6rem;
+  padding: .65rem .75rem;
+  background: var(--surface-strong);
+  color: var(--ink);
+}
+
+.mobile-app-shell .mobile-storage-list {
+  display: grid;
+  margin: 0;
+}
+
+.mobile-app-shell .mobile-storage-list > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-top: 1px solid var(--line);
+  padding: .75rem 0;
+}
+
+.mobile-app-shell .mobile-storage-list dt {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  color: var(--ink);
+}
+
+.mobile-app-shell .mobile-storage-list dt small {
+  border-radius: 99px;
+  padding: .15rem .4rem;
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-size: .65rem;
+}
+
+.mobile-app-shell .mobile-storage-list dd {
+  margin: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.mobile-app-shell .mobile-danger-zone {
+  border-color: color-mix(in srgb,var(--accent) 45%,var(--line));
+}
+
+.mobile-app-shell .mobile-danger-zone h2 {
+  margin: 0;
+}
+
+.mobile-app-shell .mobile-danger-zone p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.mobile-app-shell .settings-title-unlock {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+}
+
+.mobile-app-shell .settings-title-unlock:focus-visible {
+  border-radius: 5px;
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.mobile-app-shell .mobile-storage-total {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: .2rem 1rem;
+  margin: .9rem 0;
+  border-radius: var(--radius-control);
+  padding: 1rem;
+  background: var(--surface-strong);
+}
+
+.mobile-app-shell .mobile-storage-total span {
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 800;
+  letter-spacing: .06em;
+}
+
+.mobile-app-shell .mobile-storage-total b {
+  font: 700 1.65rem var(--font-editorial);
+  font-variant-numeric: tabular-nums;
+}
+
+.mobile-app-shell .mobile-storage-total small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
+.mobile-app-shell .mobile-storage-category-grid {
+  display: grid;
+  gap: .7rem;
+}
+
+.mobile-app-shell .mobile-storage-category {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: .8rem;
+  background: color-mix(in srgb,var(--surface) 84%,transparent);
+}
+
+.mobile-app-shell .mobile-storage-category header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .8rem;
+  margin-bottom: .55rem;
+}
+
+.mobile-app-shell .mobile-storage-category header strong {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.mobile-app-shell .mobile-storage-category > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .8rem;
+  padding: .2rem 0;
+  color: var(--muted);
+  font-size: .75rem;
+}
+
+.mobile-app-shell .mobile-storage-category > div small {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.mobile-app-shell .mobile-version-label {
+  margin: .2rem 0 1rem;
+  color: var(--muted);
+  font-size: .7rem;
+  text-align: center;
+}
+
+.mobile-app-shell .mobile-developer-settings .mobile-service-card > h2 {
+  margin: 0 0 .35rem;
+}
+
+.mobile-app-shell .mobile-developer-settings .mobile-service-card > p {
+  margin: 0 0 .9rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.mobile-app-shell .settings-group {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  border-radius: 11px;
+  box-shadow: none;
+}
+
+.mobile-app-shell .settings-row {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  grid-template-columns: 32px minmax(0,1fr) auto 16px;
+  min-height: 54px;
+  gap: 8px;
+  padding: 6px 9px;
+}
+
+.mobile-app-shell .settings-row-icon {
+  width: 29px;
+  height: 29px;
+  border-radius: 7px;
+}
+
+.mobile-app-shell .settings-row-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mobile-app-shell .settings-row > span:nth-child(2) b {
+  font-size: .8125rem;
+}
+
+.mobile-app-shell .settings-row small {
+  margin-top: 1px;
+  font-size: .625rem;
+  line-height: 1.3;
+}
+
+.mobile-app-shell .settings-row em {
+  grid-column: 3;
+  border-radius: 99px;
+  padding: 2px 6px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 800;
+  font-size: .53125rem;
+}
+
+.mobile-app-shell .mobile-service-settings {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 14px;
+}
+
+.mobile-app-shell .mobile-service-card {
+  display: grid;
+  gap: 10px;
+}
+
+.mobile-app-shell .mobile-service-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 9px;
+}
+
+.mobile-app-shell .mobile-service-heading h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.mobile-app-shell .mobile-service-heading p {
+  margin: 0;
+  color: var(--muted);
+  margin-top: 2px;
+  font-size: .6875rem;
+  line-height: 1.42;
+}
+
+.mobile-app-shell .mobile-service-card label {
+  display: grid;
+  color: var(--muted);
+  gap: 4px;
+  font-size: .75rem;
+}
+
+.mobile-app-shell .mobile-service-card select,
+.mobile-app-shell .mobile-service-card input {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  min-height: 40px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  font-size: .78125rem;
+}
+
+.mobile-app-shell .mobile-service-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mobile-app-shell .settings-help {
+  margin: -.35rem 0 0;
+  color: var(--muted);
+  font-size: .6875rem;
+}
+
+.mobile-app-shell .sync-settings-panel {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 20px;
+}
+
+.mobile-app-shell .sync-incoming-card,
+.mobile-app-shell .sync-operation-card,
+.mobile-app-shell .sync-device-section {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--paper);
+}
+
+.mobile-app-shell .sync-local-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--paper);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+}
+
+.mobile-app-shell .sync-section-heading,
+.mobile-app-shell .sync-operation-card header,
+.mobile-app-shell .sync-incoming-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+}
+
+.mobile-app-shell .sync-local-card > div,
+.mobile-app-shell .sync-device-identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.mobile-app-shell .sync-local-card b,
+.mobile-app-shell .sync-device-identity b,
+.mobile-app-shell .sync-operation-card b {
+  display: block;
+  font-size: .78125rem;
+}
+
+.mobile-app-shell .sync-local-card small,
+.mobile-app-shell .sync-device-identity small,
+.mobile-app-shell .sync-operation-card small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: .625rem;
+}
+
+.mobile-app-shell .sync-local-card em {
+  color: var(--success);
+  font-size: .625rem;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.mobile-app-shell .sync-presence {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.mobile-app-shell .sync-presence.online {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb,var(--success) 13%,transparent);
+}
+
+.mobile-app-shell .sync-pairing-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: color-mix(in srgb,var(--warning-soft) 72%,var(--paper));
+  text-align: center;
+}
+
+.mobile-app-shell .sync-pairing-card > p {
+  margin: 0;
+  font-size: .75rem;
+}
+
+.mobile-app-shell .sync-pairing-card > strong {
+  display: block;
+  margin: 10px 0 5px;
+  font: 700 2rem var(--font-editorial);
+  letter-spacing: .12em;
+}
+
+.mobile-app-shell .sync-pairing-card > small {
+  color: var(--muted);
+  font-size: .625rem;
+}
+
+.mobile-app-shell .sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.mobile-app-shell .sync-pairing-card .sync-actions {
+  justify-content: center;
+}
+
+.mobile-app-shell .sync-settings-panel .secondary-button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 11px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 700 .6875rem var(--font-ui);
+}
+
+.mobile-app-shell .sync-settings-panel .primary-button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 11px;
+  font: 700 .6875rem var(--font-ui);
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.mobile-app-shell .sync-settings-panel .text-button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 11px;
+  font: 700 .6875rem var(--font-ui);
+  background: transparent;
+  color: var(--accent);
+  border-color: transparent;
+}
+
+.mobile-app-shell .sync-settings-panel button:disabled {
+  cursor: default;
+  opacity: .5;
+}
+
+.mobile-app-shell .sync-incoming-card header p,
+.mobile-app-shell .sync-section-heading p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: .625rem;
+}
+
+.mobile-app-shell .sync-incoming-card header h3,
+.mobile-app-shell .sync-section-heading h3 {
+  margin: 0;
+  font-size: .875rem;
+}
+
+.mobile-app-shell .sync-incoming-card header > span,
+.mobile-app-shell .sync-operation-card header > span {
+  border-radius: 99px;
+  padding: 4px 7px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: .625rem;
+  white-space: nowrap;
+}
+
+.mobile-app-shell .sync-incoming-card dl {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.mobile-app-shell .sync-incoming-card dl div {
+  border-radius: 7px;
+  padding: 8px;
+  background: var(--surface);
+}
+
+.mobile-app-shell .sync-incoming-card dt {
+  color: var(--muted);
+  font-size: .59375rem;
+}
+
+.mobile-app-shell .sync-incoming-card dd {
+  margin: 2px 0 0;
+  font-weight: 700;
+}
+
+.mobile-app-shell .sync-incoming-card > p {
+  color: var(--muted-strong);
+  font-size: .6875rem;
+  line-height: 1.55;
+}
+
+.mobile-app-shell .sync-operation-card progress {
+  width: 100%;
+  margin-top: 9px;
+  accent-color: var(--accent);
+}
+
+.mobile-app-shell .sync-device-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.mobile-app-shell .sync-device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.mobile-app-shell .sync-device-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.mobile-app-shell .sync-device-row > .sync-actions {
+  margin-top: 0;
+  justify-content: flex-end;
+}
+
+.mobile-app-shell .sync-device-icon {
+  display: inline-grid;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+  background: #334353;
+  color: white;
+  font-size: .6875rem;
+  font-weight: 800;
+}
+
+.mobile-app-shell .sync-device-icon.android {
+  background: #527356;
+}
+
+.mobile-app-shell .sync-empty {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: .6875rem;
+  line-height: 1.55;
+}
+
+.mobile-app-shell .sync-diagnostic {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--warning-soft);
+  border-color: color-mix(in srgb,var(--warning) 30%,var(--line));
+}
+
+.mobile-app-shell .sync-diagnostic p {
+  margin: 4px 0 0;
+  color: var(--muted-strong);
+  font-size: .6875rem;
+}
+
+.mobile-app-shell .sync-last-result {
+  margin: 0 3px;
+  color: var(--success);
+  font-size: .6875rem;
+}

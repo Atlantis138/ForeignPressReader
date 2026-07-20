@@ -1,0 +1,11 @@
+{
+  "policyVersion": 1,
+  "sourceBytes": 524288000,
+  "entries": 4000,
+  "expandedBytes": 1073741824,
+  "textEntryBytes": 16777216,
+  "rasterEntryBytes": 67108864,
+  "extractedRasterBytes": 786432000,
+  "compressionRatio": 2000,
+  "rasterExtensions": ["jpg", "jpeg", "png", "gif", "webp"]
+}

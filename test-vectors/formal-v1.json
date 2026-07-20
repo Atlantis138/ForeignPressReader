@@ -1,0 +1,19 @@
+{
+  "schemaGeneration": "formal-v1",
+  "schemaVersion": 1,
+  "contentIdVersion": 2,
+  "schemaFingerprint": "0f164f3180c87c0e36c85e3a18a43e52e5da8485e588bbacb25e75c96af991e3",
+  "stableIdentities": [
+    {
+      "parts": ["lex_en_abc", "reader_manual", "favorite"],
+      "sha256": "ef71fb1bfb407be6931c217909095f44112bde4f8791258f3ea66eaf604dfb9f"
+    }
+  ],
+  "versionOrder": [
+    {
+      "left": { "updatedAt": "2026-07-12T00:00:00.000Z", "deviceId": "b" },
+      "right": { "updatedAt": "2026-07-12T00:00:00.000Z", "deviceId": "a" },
+      "result": 1
+    }
+  ]
+}

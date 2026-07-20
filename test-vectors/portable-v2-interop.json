@@ -1,0 +1,257 @@
+{
+  "contract": {
+    "formatVersion": 2,
+    "databaseSchemaVersion": 2,
+    "contentIdVersion": 2
+  },
+  "portableData": {
+    "publicationLifecycle": [],
+    "settings": [
+      {
+        "key": "translation.preferences",
+        "value": "{\"providerId\":\"openai\",\"modelId\":\"interop-model\"}",
+        "updatedAt": "2026-01-02T08:00:00+08:00",
+        "deviceId": "device-a"
+      }
+    ],
+    "readingPositions": [],
+    "userLexemes": [
+      {
+        "lexemeKey": "lex_en_interop_active_0000000001",
+        "lemmaSnapshot": "durable",
+        "phoneticSnapshot": "ˈdjʊərəbl",
+        "briefMeaningsJson": "[\"持久的\"]",
+        "senseGroupsJson": "[]",
+        "bncRank": 2048,
+        "frequencyRank": 1024,
+        "manualState": "learning",
+        "manualFamiliarity": 3,
+        "createdAt": "2026-01-02T00:00:00.000Z",
+        "updatedAt": "2026-01-12T00:00:00.000Z",
+        "deviceId": "device-a",
+        "snapshotProvider": "ecdict",
+        "snapshotQuality": 10
+      },
+      {
+        "lexemeKey": "lex_en_interop_tombstone_000002",
+        "lemmaSnapshot": "obsolete",
+        "phoneticSnapshot": null,
+        "briefMeaningsJson": "[\"废弃的\"]",
+        "senseGroupsJson": "[]",
+        "bncRank": null,
+        "frequencyRank": null,
+        "manualState": "unrated",
+        "manualFamiliarity": null,
+        "createdAt": "2026-01-02T00:00:00.000Z",
+        "updatedAt": "2026-01-06T00:00:00.000Z",
+        "deviceId": "device-a",
+        "snapshotProvider": "ecdict",
+        "snapshotQuality": 10
+      }
+    ],
+    "lexemeExamples": [
+      {
+        "exampleId": "example-interop-1",
+        "lexemeKey": "lex_en_interop_active_0000000001",
+        "text": "The durable format survives a cross-runtime round trip.",
+        "translationZh": "这种持久格式能经受跨运行时往返。",
+        "partOfSpeech": "adjective",
+        "definition": "able to last",
+        "providerId": "ecdict",
+        "position": 0,
+        "createdAt": "2026-01-03T00:00:00.000Z",
+        "updatedAt": "2026-01-03T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ],
+    "vocabularySources": [
+      {
+        "sourceId": "vocabulary-source-active",
+        "lexemeKey": "lex_en_interop_active_0000000001",
+        "sourceType": "reader_manual",
+        "sourceRef": "favorite",
+        "active": true,
+        "addedAt": "2026-01-03T00:00:00.000Z",
+        "removedAt": null,
+        "updatedAt": "2026-01-03T00:00:00.000Z",
+        "deviceId": "device-a"
+      },
+      {
+        "sourceId": "vocabulary-source-tombstone",
+        "lexemeKey": "lex_en_interop_tombstone_000002",
+        "sourceType": "reader_manual",
+        "sourceRef": "favorite",
+        "active": false,
+        "addedAt": "2026-01-03T00:00:00.000Z",
+        "removedAt": "2026-01-06T00:00:00.000Z",
+        "updatedAt": "2026-01-06T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ],
+    "savedContexts": [
+      {
+        "contextId": "context-tombstone",
+        "lexemeKey": "lex_en_interop_tombstone_000002",
+        "surface": "obsolete",
+        "publicationId": null,
+        "publicationTitle": "Interop Weekly",
+        "articleId": null,
+        "articleTitle": "A portable record",
+        "blockId": null,
+        "tokenIndex": 0,
+        "sentence": "This context was removed.",
+        "paragraph": "This context was removed before export.",
+        "sentenceHash": "context-sentence-hash",
+        "active": false,
+        "savedAt": "2026-01-03T00:00:00.000Z",
+        "removedAt": "2026-01-06T00:00:00.000Z",
+        "updatedAt": "2026-01-06T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ],
+    "studyPlans": [
+      {
+        "planId": "plan-interop",
+        "name": "Interop plan",
+        "status": "active",
+        "dailyNewLimit": 20,
+        "dailyReviewLimit": 100,
+        "newOrder": "reader_first_frequency",
+        "createdAt": "2026-01-03T00:00:00.000Z",
+        "updatedAt": "2026-01-12T00:00:00.000Z",
+        "deviceId": "device-a",
+        "deletedAt": null
+      }
+    ],
+    "studyPlanSources": [
+      {
+        "sourceId": "plan-source-interop",
+        "planId": "plan-interop",
+        "sourceType": "reader_manual",
+        "sourceRef": "favorite",
+        "active": true,
+        "addedAt": "2026-01-03T00:00:00.000Z",
+        "removedAt": null,
+        "updatedAt": "2026-01-12T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ],
+    "studyPlanOrigins": [
+      {
+        "originId": "origin-active",
+        "planId": "plan-interop",
+        "planSourceId": "plan-source-interop",
+        "lexemeKey": "lex_en_interop_active_0000000001",
+        "active": true,
+        "discoveredAt": "2026-01-03T00:00:00.000Z",
+        "removedAt": null,
+        "updatedAt": "2026-01-12T00:00:00.000Z",
+        "deviceId": "device-a"
+      },
+      {
+        "originId": "origin-tombstone",
+        "planId": "plan-interop",
+        "planSourceId": "plan-source-interop",
+        "lexemeKey": "lex_en_interop_tombstone_000002",
+        "active": false,
+        "discoveredAt": "2026-01-03T00:00:00.000Z",
+        "removedAt": "2026-01-06T00:00:00.000Z",
+        "updatedAt": "2026-01-06T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ],
+    "studyPlanExclusions": [
+      {
+        "planId": "plan-interop",
+        "lexemeKey": "lex_en_interop_tombstone_000002",
+        "excluded": true,
+        "excludedAt": "2026-01-06T00:00:00.000Z",
+        "restoredAt": null,
+        "updatedAt": "2026-01-06T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ],
+    "schedulerProfiles": [
+      {
+        "profileId": "profile-interop",
+        "fsrsVersion": "6",
+        "parametersJson": "[]",
+        "parametersHash": "profile-interop-hash",
+        "createdAt": "2026-01-03T00:00:00.000Z"
+      }
+    ],
+    "reviewCards": [
+      {
+        "lexemeKey": "lex_en_interop_active_0000000001",
+        "dueAt": "2026-01-13T00:00:00.000Z",
+        "stability": 2.5,
+        "difficulty": 4.5,
+        "elapsedDays": 1,
+        "scheduledDays": 2,
+        "learningSteps": 0,
+        "reps": 1,
+        "lapses": 0,
+        "state": 2,
+        "lastReviewAt": "2026-01-10T00:00:00.000Z",
+        "updatedAt": "2026-01-10T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ],
+    "reviewEvents": [
+      {
+        "eventId": "review-event-interop",
+        "commandId": "review-command-interop",
+        "lexemeKey": "lex_en_interop_active_0000000001",
+        "planId": "plan-interop",
+        "answer": "known",
+        "rating": 3,
+        "profileId": "profile-interop",
+        "preCardJson": "{}",
+        "postCardJson": "{}",
+        "logJson": "{}",
+        "reviewedAt": "2026-01-10T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ],
+    "reinforcementEvents": [
+      {
+        "eventId": "reinforcement-event-interop",
+        "commandId": "reinforcement-command-interop",
+        "lexemeKey": "lex_en_interop_active_0000000001",
+        "planId": "plan-interop",
+        "answer": "known",
+        "consecutiveBefore": 0,
+        "consecutiveAfter": 1,
+        "createdAt": "2026-01-11T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ],
+    "reviewSuspensions": [
+      {
+        "lexemeKey": "lex_en_interop_active_0000000001",
+        "active": true,
+        "reason": "interop-test",
+        "suspendedAt": "2026-01-12T00:00:00.000Z",
+        "restoredAt": null,
+        "updatedAt": "2026-01-12T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ],
+    "studyProgressState": [
+      {
+        "stateId": "global",
+        "resetAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ],
+    "studyLexemeResets": [
+      {
+        "lexemeKey": "lex_en_interop_tombstone_000002",
+        "resetAt": "2026-01-05T00:00:00.000Z",
+        "updatedAt": "2026-01-05T00:00:00.000Z",
+        "deviceId": "device-a"
+      }
+    ]
+  }
+}

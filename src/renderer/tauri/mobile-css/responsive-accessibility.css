@@ -1,0 +1,193 @@
+/* Responsive layout and accessibility overrides */
+
+@media (max-width: 520px) {
+  .mobile-page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .mobile-page-header-action,
+.mobile-page-header-action .mobile-button {
+    width: 100%;
+  }
+
+  .study-principles {
+    grid-template-columns: 1fr;
+  }
+
+  .mobile-confirm-dialog > div:last-child {
+    flex-direction: column-reverse;
+  }
+
+  .mobile-confirm-dialog .mobile-button {
+    width: 100%;
+  }
+
+  .library-command-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .library-command-actions {
+    justify-content: flex-end;
+  }
+
+  .publication-heading {
+    grid-template-columns: 82px minmax(0,1fr);
+    gap: 15px;
+  }
+
+  .publication-heading .mobile-cover {
+    width: 82px;
+  }
+
+  .mobile-reader-search {
+    grid-template-columns: 20px minmax(0,1fr) auto;
+  }
+
+  .mobile-reader-search > .mobile-icon-button {
+    grid-row: 2;
+  }
+
+  .mobile-reader-search > .mobile-icon-button:nth-of-type(1) {
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  .mobile-reader-search > .mobile-icon-button:nth-of-type(2) {
+    grid-column: 2;
+    justify-self: end;
+    margin-right: 48px;
+  }
+
+  .mobile-reader-search > .mobile-button {
+    grid-row: 2;
+    grid-column: 3;
+  }
+
+  .mobile-reader-search > small {
+    grid-row: 3;
+    grid-column: 2/-1;
+  }
+}
+
+@media (min-width: 840px) and (min-height: 600px) {
+  .mobile-app-shell .mobile-scroll {
+    padding-left: 80px;
+  }
+
+  .mobile-app-shell .mobile-primary-navigation {
+    inset: 0 auto 0 0;
+    display: flex;
+    width: 80px;
+    flex-direction: column;
+    gap: 3px;
+    border-top: 0;
+    border-right: 1px solid var(--line);
+  }
+
+  .mobile-app-shell .mobile-primary-navigation > button {
+    width: 64px;
+    flex: 0 0 auto;
+  }
+
+  .mobile-app-shell .mobile-navigation-brand {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    place-items: center;
+    margin: 0 auto 7px;
+    border-radius: 13px;
+    overflow: hidden;
+  }
+
+  .mobile-app-shell .mobile-navigation-status {
+    display: flex;
+    margin: auto auto 0;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    color: var(--muted);
+    font-size: .5625rem;
+  }
+
+  .mobile-navigation-status i {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--success);
+  }
+
+  .mobile-global-task,
+.mobile-snackbar {
+    left: 96px;
+    bottom: max(16px,env(safe-area-inset-bottom));
+  }
+
+  .mobile-app-shell[data-immersive="true"] .mobile-scroll {
+    padding-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+*::before,
+*::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+@media (min-width:600px) and (max-width:839px) {
+  .study-plan-grid {
+    grid-template-columns: repeat(3,minmax(0,1fr));
+  }
+
+  .mobile-app-shell .mobile-library-grid.grid {
+    grid-template-columns: repeat(4,minmax(0,1fr));
+  }
+}
+
+@media (min-width:840px) and (min-height:600px) {
+  .study-today-card {
+    grid-template-columns: minmax(0,1fr) auto;
+    align-items: center;
+  }
+
+  .study-plan-grid {
+    grid-template-columns: repeat(3,minmax(0,1fr));
+  }
+
+  .dictionary-page,
+.lexeme-page,
+.study-page,
+.study-plan-detail-page,
+.study-editor-page {
+    width: min(100%,1040px) !important;
+  }
+
+  .mobile-app-shell .mobile-page {
+    padding-top: max(18px,env(safe-area-inset-top));
+  }
+
+  .mobile-app-shell .mobile-library-grid.grid {
+    grid-template-columns: repeat(5,minmax(0,1fr));
+  }
+}
+
+@media (max-width:520px) {
+  .study-plan-grid,
+.mobile-plan-limits,
+.study-word-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .study-word-toolbar > .mobile-button {
+    justify-self: end;
+  }
+
+  .mobile-app-shell .mobile-service-grid {
+    grid-template-columns: 1fr;
+  }
+}

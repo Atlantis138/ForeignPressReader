@@ -1,0 +1,101 @@
+{
+  "vectorVersion": 1,
+  "contentIdVersion": 2,
+  "fixture": "synthetic-weekly-v1",
+  "expectedPlan": {
+    "id": "pub_6717464f151718094a4a1266",
+    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sourceKey": "generic-epub:metadata:synthetic weekly\u001f\u001f",
+    "profileId": "generic-epub",
+    "title": "Synthetic Weekly",
+    "creator": null,
+    "language": "en",
+    "coverPath": "EPUB/images/cover.jpg",
+    "sections": [
+      {
+        "id": "7ba47e9517f98914a7d019412e08",
+        "sourceKey": "EPUB/section.xhtml",
+        "title": "Leaders",
+        "position": 0,
+        "articles": [
+          {
+            "id": "18bde25ed12368df761079722579",
+            "sourceKey": "EPUB/article.xhtml",
+            "title": "A synthetic article",
+            "rubric": "A useful rubric",
+            "publishedAt": null,
+            "position": 0,
+            "sourceHref": "EPUB/article.xhtml",
+            "blocks": [
+              {
+                "id": "8feecd12107db139ee872a24411b",
+                "sourceKey": "title:f3c561ca44bc658b1520:0",
+                "type": "title",
+                "position": 0,
+                "text": "A synthetic article",
+                "html": "A synthetic article",
+                "assetPath": null,
+                "alt": null
+              },
+              {
+                "id": "535bcf3b750c97bbbe591992e409",
+                "sourceKey": "rubric:ee7e6ae60cbf1317cbfa:0",
+                "type": "rubric",
+                "position": 1,
+                "text": "A useful rubric",
+                "html": "A useful rubric",
+                "assetPath": null,
+                "alt": null
+              },
+              {
+                "id": "5d8d073400c9f9093a1b3fff2e0a",
+                "sourceKey": "paragraph:e950a24fe3ba856138c3:0",
+                "type": "paragraph",
+                "position": 2,
+                "text": "This is an important first paragraph with enough English words for article classification today.",
+                "html": "This is an <em>important</em> first paragraph with enough English words for article classification today.",
+                "assetPath": null,
+                "alt": null
+              },
+              {
+                "id": "66358a8263133853a7b35c7342d7",
+                "sourceKey": "paragraph:bdab4717c944caec08e2:0",
+                "type": "paragraph",
+                "position": 3,
+                "text": "The second paragraph makes this fixture representative while remaining deliberately concise for a unit test.",
+                "html": "The second paragraph makes this fixture representative while remaining deliberately concise for a unit test.",
+                "assetPath": null,
+                "alt": null
+              },
+              {
+                "id": "5efa0ab8506a534e49a65e2c816f",
+                "sourceKey": "image:EPUB/images/photo.jpg:0",
+                "type": "image",
+                "position": 4,
+                "text": null,
+                "html": null,
+                "assetPath": "EPUB/images/photo.jpg",
+                "alt": "Synthetic photograph"
+              },
+              {
+                "id": "521476141421c4ccc755537abbfe",
+                "sourceKey": "caption:74ab7e1a6361a95d1350:0",
+                "type": "caption",
+                "position": 5,
+                "text": "A short caption",
+                "html": "A short caption",
+                "assetPath": null,
+                "alt": null
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "unsectionedArticles": [],
+    "assetPaths": [
+      "EPUB/images/cover.jpg",
+      "EPUB/images/photo.jpg"
+    ]
+  }
+}

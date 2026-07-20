@@ -1,0 +1,77 @@
+/* Design tokens and light/dark theme values */
+
+:root {
+  --font-ui: Inter, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-editorial: Georgia, "Songti SC", "Noto Serif SC", "Times New Roman", serif;
+  --font-article: Georgia, "Noto Serif SC", "Times New Roman", serif;
+  --canvas: #f3f0e9;
+  --paper: #fcfbf8;
+  --surface: #f8f4ed;
+  --surface-strong: #eee9df;
+  --ink: #24211d;
+  --muted: #746f66;
+  --muted-strong: #5c574f;
+  --line: #ddd7cb;
+  --line-strong: #bcb4a6;
+  --accent: #c9252b;
+  --accent-dark: #a51d22;
+  --accent-soft: #f8e9e8;
+  --success: #297542;
+  --success-soft: #e6f3e9;
+  --warning: #946019;
+  --warning-soft: #f8edda;
+  --danger: #a82429;
+  --danger-soft: #f9e7e7;
+  --focus: #356fa8;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --shadow-float: 0 14px 38px rgba(37,29,20,.11);
+  --shadow-modal: 0 24px 70px rgba(25,19,13,.18);
+  --motion-fast: 180ms;
+  --motion-sheet: 240ms;
+  --text-xs: .6875rem;
+  --text-sm: .75rem;
+  --text-body: .875rem;
+  --text-strong: .9375rem;
+  --text-section: 1.0625rem;
+  font-family: var(--font-ui);
+  color: var(--ink);
+  background: var(--canvas);
+  font-synthesis: none;
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-sheet: 18px;
+  --shadow-card: 0 1px 2px rgba(37,29,20,.035);
+  --title-page: clamp(1.55rem,6vw,1.78rem);
+}
+
+:root[data-theme="dark"] {
+  --canvas: #1c1b19;
+  --paper: #242320;
+  --surface: #292722;
+  --surface-strong: #302e2a;
+  --ink: #eee9df;
+  --muted: #aaa49a;
+  --muted-strong: #c4beb4;
+  --line: #403d38;
+  --line-strong: #625d55;
+  --accent: #e14a4f;
+  --accent-dark: #f0666b;
+  --accent-soft: #44272a;
+  --success: #77bd88;
+  --success-soft: #243a2a;
+  --warning: #dfae63;
+  --warning-soft: #3d3221;
+  --danger: #ef7377;
+  --danger-soft: #412427;
+  --focus: #79aee0;
+  --shadow-modal: 0 24px 70px rgba(0,0,0,.38);
+  color-scheme: dark;
+  --shadow-card: none;
+  --shadow-float: 0 10px 28px rgba(0,0,0,.2);
+}
