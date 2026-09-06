@@ -1,3 +1,5 @@
+import type { SyncEntityRef } from '../core/sync-model'
+import { validateReaderRecord, type ReaderRecord } from '../core/reader-records'
 import type { DatabaseSync } from 'node:sqlite'
 import type { ManualLearningState, ParsedPublicationPlan } from '../shared/types'
 import type {
@@ -13,8 +15,94 @@ import type {
   PortableUserData,
 } from '../core/portable-data'
 import { compareVersionedRecord, PORTABLE_DATASET_KEYS } from '../core/portable-data'
+import {
+  isLibraryEntitySettingKey,
+  isValidLibraryEntitySetting,
+  reconcileLibraryManagementSettings,
+} from './library-sync-settings'
 
 type Row = Record<string, unknown>
+const DATASET_IDENTITIES = {
+  "readerRecords": [
+    "reader-record",
+    "record_id"
+  ],
+  "publicationLifecycle": [
+    "publication-lifecycle",
+    "publication_id"
+  ],
+  "settings": [
+    "setting",
+    "key"
+  ],
+  "readingPositions": [
+    "reading-position",
+    "publication_id"
+  ],
+  "userLexemes": [
+    "user-lexeme",
+    "lexeme_key"
+  ],
+  "lexemeExamples": [
+    "lexeme-example",
+    "example_id"
+  ],
+  "vocabularySources": [
+    "vocabulary-source",
+    "source_id"
+  ],
+  "savedContexts": [
+    "saved-context",
+    "context_id"
+  ],
+  "studyPlans": [
+    "study-plan",
+    "plan_id"
+  ],
+  "studyPlanSources": [
+    "study-plan-source",
+    "source_id"
+  ],
+  "studyPlanOrigins": [
+    "study-plan-origin",
+    "origin_id"
+  ],
+  "studyPlanExclusions": [
+    "study-plan-exclusion",
+    "plan_id",
+    "lexeme_key"
+  ],
+  "schedulerProfiles": [
+    "scheduler-profile",
+    "profile_id"
+  ],
+  "reviewCards": [
+    "review-card",
+    "lexeme_key"
+  ],
+  "reviewEvents": [
+    "review-event",
+    "event_id"
+  ],
+  "reinforcementEvents": [
+    "reinforcement-event",
+    "event_id"
+  ],
+  "reviewSuspensions": [
+    "review-suspension",
+    "lexeme_key"
+  ],
+  "studyProgressState": [
+    "study-progress-state",
+    "state_id"
+  ],
+  "studyLexemeResets": [
+    "study-lexeme-reset",
+    "lexeme_key"
+  ]
+} as const
+
+export type LibrarySyncDataMode = 'auto' | 'legacy' | 'fine-grained'
 
 function* mapRows<T extends PortableDatasetRecord>(
   rows: Iterable<Row>,
@@ -89,39 +177,53 @@ export class PortableSqliteRepository {
     }
   }
 
-  exportPortableUserData(): PortableUserData {
+  exportPortableUserData(selection?: readonly Pick<SyncEntityRef, 'type' | 'key'>[]): PortableUserData {
     return Object.fromEntries(PORTABLE_DATASET_KEYS.map((key) => [
       key,
-      [...this.iteratePortableDataset(key)],
+      [...this.iteratePortableDataset(key, selection?.filter(ref=>ref.type===DATASET_IDENTITIES[key][0]).map(ref=>ref.key))],
     ])) as unknown as PortableUserData
   }
 
-  iteratePortableDataset(dataset: PortableDatasetKey): Iterable<PortableDatasetRecord> {
+  iteratePortableDataset(dataset: PortableDatasetKey, keys?: readonly string[]): Iterable<PortableDatasetRecord> {
+    if (keys?.length === 0) return []
+    const rows = (sql: string): Iterable<Row> => {
+      if (!keys) return this.db.prepare(sql).iterate() as Iterable<Row>
+      const columns = DATASET_IDENTITIES[dataset].slice(1)
+      const projection = columns.map((_,index)=>`json_extract(value,'$[${index}]')`).join(',')
+      const query = `SELECT * FROM (${sql}) WHERE (${columns.join(',')}) IN (SELECT ${projection} FROM json_each(?))`
+      return this.db.prepare(query).iterate(JSON.stringify(keys.map(key=>key.split('\u001f')))) as Iterable<Row>
+    }
     switch (dataset) {
-      case 'publicationLifecycle': return mapRows(this.db.prepare(`
+      case 'readerRecords': return mapRows(rows('SELECT * FROM reader_records ORDER BY record_id'), (row): ReaderRecord => ({
+        recordId: String(row.record_id), publicationId: String(row.publication_id), articleId: String(row.article_id),
+        kind: row.kind as ReaderRecord['kind'], payload: String(row.payload), updatedAt: String(row.updated_at), deviceId: String(row.device_id),
+      }))
+      case 'publicationLifecycle': return mapRows(rows(`
         SELECT publication_id,content_hash,format_id,title_snapshot,state,changed_at,device_id
         FROM publication_lifecycle ORDER BY publication_id
-      `).iterate() as Iterable<Row>, (row): PortablePublicationLifecycleRecord => ({
+      `), (row): PortablePublicationLifecycleRecord => ({
         publicationId: String(row.publication_id), contentHash: String(row.content_hash),
         formatId: String(row.format_id), titleSnapshot: String(row.title_snapshot),
         state: String(row.state) as 'present' | 'deleted', changedAt: String(row.changed_at), deviceId: String(row.device_id),
       }))
-      case 'settings': return mapRows(this.db.prepare(`
+      case 'settings': return mapRows(rows(`
         SELECT key,value,updated_at,device_id FROM settings
-        WHERE key IN ('reader.preferences','dictionary.preferences','study.preferences','speech.preferences','translation.preferences','library.management') ORDER BY key
-      `).iterate() as Iterable<Row>, (row): PortableSettingRecord => ({
+        WHERE key IN ('reader.preferences','dictionary.preferences','study.preferences','speech.preferences','translation.preferences','library.management')
+          OR key LIKE 'library.category.%' OR key LIKE 'library.item.%'
+        ORDER BY key
+      `), (row): PortableSettingRecord => ({
         key: String(row.key), value: String(row.value), updatedAt: String(row.updated_at), deviceId: String(row.device_id),
       }))
-      case 'readingPositions': return mapRows(this.db.prepare(`
+      case 'readingPositions': return mapRows(rows(`
         SELECT publication_id,article_id,scroll_top,anchor_block_id,anchor_token_index,anchor_fraction,updated_at,device_id
         FROM reading_positions ORDER BY publication_id
-      `).iterate() as Iterable<Row>, (row): PortableReadingPositionRecord => ({
+      `), (row): PortableReadingPositionRecord => ({
         publicationId: String(row.publication_id), articleId: String(row.article_id), scrollTop: Number(row.scroll_top),
         anchorBlockId: row.anchor_block_id == null ? null : String(row.anchor_block_id),
         anchorTokenIndex: row.anchor_token_index == null ? null : Number(row.anchor_token_index),
         anchorFraction: Number(row.anchor_fraction ?? 0), updatedAt: String(row.updated_at), deviceId: String(row.device_id),
       }))
-      case 'userLexemes': return mapRows(this.db.prepare('SELECT * FROM user_lexemes ORDER BY lexeme_key').iterate() as Iterable<Row>, (row) => ({
+      case 'userLexemes': return mapRows(rows('SELECT * FROM user_lexemes ORDER BY lexeme_key'), (row) => ({
         lexemeKey: String(row.lexeme_key), lemmaSnapshot: String(row.lemma_snapshot),
         phoneticSnapshot: row.phonetic_snapshot == null ? null : String(row.phonetic_snapshot),
         briefMeaningsJson: String(row.brief_meanings_json), senseGroupsJson: String(row.sense_groups_json),
@@ -132,19 +234,19 @@ export class PortableSqliteRepository {
         snapshotProvider: String(row.snapshot_provider) === 'baidu' ? 'baidu' as const : 'ecdict' as const,
         snapshotQuality: Number(row.snapshot_quality ?? 10),
       }))
-      case 'lexemeExamples': return mapRows(this.db.prepare('SELECT * FROM lexeme_examples ORDER BY lexeme_key,position').iterate() as Iterable<Row>, (row) => ({
+      case 'lexemeExamples': return mapRows(rows('SELECT * FROM lexeme_examples ORDER BY lexeme_key,position'), (row) => ({
         exampleId: String(row.example_id), lexemeKey: String(row.lexeme_key), text: String(row.text),
         translationZh: row.translation_zh == null ? null : String(row.translation_zh),
         partOfSpeech: row.part_of_speech == null ? null : String(row.part_of_speech), definition: row.definition == null ? null : String(row.definition),
         providerId: String(row.provider_id) === 'baidu' ? 'baidu' as const : 'ecdict' as const, position: Number(row.position),
         createdAt: String(row.created_at), updatedAt: String(row.updated_at), deviceId: String(row.device_id),
       }))
-      case 'vocabularySources': return mapRows(this.db.prepare('SELECT * FROM vocabulary_sources ORDER BY source_id').iterate() as Iterable<Row>, (row) => ({
+      case 'vocabularySources': return mapRows(rows('SELECT * FROM vocabulary_sources ORDER BY source_id'), (row) => ({
         sourceId: String(row.source_id), lexemeKey: String(row.lexeme_key), sourceType: String(row.source_type), sourceRef: String(row.source_ref),
         active: Number(row.active) === 1, addedAt: String(row.added_at), removedAt: row.removed_at == null ? null : String(row.removed_at),
         updatedAt: String(row.updated_at), deviceId: String(row.device_id),
       }))
-      case 'savedContexts': return mapRows(this.db.prepare('SELECT * FROM saved_contexts ORDER BY context_id').iterate() as Iterable<Row>, (row) => ({
+      case 'savedContexts': return mapRows(rows('SELECT * FROM saved_contexts ORDER BY context_id'), (row) => ({
         contextId: String(row.context_id), lexemeKey: String(row.lexeme_key), surface: String(row.surface),
         publicationId: row.publication_id == null ? null : String(row.publication_id), publicationTitle: String(row.publication_title_snapshot),
         articleId: row.article_id == null ? null : String(row.article_id), articleTitle: String(row.article_title_snapshot),
@@ -153,17 +255,17 @@ export class PortableSqliteRepository {
         savedAt: String(row.saved_at), removedAt: row.removed_at == null ? null : String(row.removed_at),
         updatedAt: String(row.updated_at), deviceId: String(row.device_id),
       }))
-      case 'studyPlans': return mapRows(this.db.prepare('SELECT * FROM study_plans ORDER BY plan_id').iterate() as Iterable<Row>, portableStudyPlan)
-      case 'studyPlanSources': return mapRows(this.db.prepare('SELECT source_id,plan_id,source_type,source_ref,active,added_at,removed_at,updated_at,device_id FROM study_plan_sources ORDER BY source_id').iterate() as Iterable<Row>, portableStudyPlanSource)
-      case 'studyPlanOrigins': return mapRows(this.db.prepare('SELECT * FROM study_plan_lexeme_origins ORDER BY origin_id').iterate() as Iterable<Row>, portableStudyPlanOrigin)
-      case 'studyPlanExclusions': return mapRows(this.db.prepare('SELECT * FROM study_plan_exclusions ORDER BY plan_id,lexeme_key').iterate() as Iterable<Row>, portableStudyPlanExclusion)
-      case 'schedulerProfiles': return mapRows(this.db.prepare('SELECT * FROM scheduler_profiles ORDER BY profile_id').iterate() as Iterable<Row>, portableSchedulerProfile)
-      case 'reviewCards': return mapRows(this.db.prepare('SELECT * FROM review_cards ORDER BY lexeme_key').iterate() as Iterable<Row>, portableReviewCard)
-      case 'reviewEvents': return mapRows(this.db.prepare('SELECT event_id,command_id,lexeme_key,plan_id,answer,rating,profile_id,pre_card_json,post_card_json,log_json,reviewed_at,device_id FROM review_events ORDER BY event_id').iterate() as Iterable<Row>, portableReviewEvent)
-      case 'reinforcementEvents': return mapRows(this.db.prepare('SELECT event_id,command_id,lexeme_key,plan_id,answer,consecutive_before,consecutive_after,created_at,device_id FROM reinforcement_events ORDER BY event_id').iterate() as Iterable<Row>, portableReinforcementEvent)
-      case 'reviewSuspensions': return mapRows(this.db.prepare('SELECT * FROM review_suspensions ORDER BY lexeme_key').iterate() as Iterable<Row>, portableReviewSuspension)
-      case 'studyProgressState': return mapRows(this.db.prepare('SELECT * FROM study_progress_state ORDER BY state_id').iterate() as Iterable<Row>, portableStudyProgressState)
-      case 'studyLexemeResets': return mapRows(this.db.prepare('SELECT * FROM study_lexeme_resets ORDER BY lexeme_key').iterate() as Iterable<Row>, (row): PortableStudyLexemeResetRecord => ({
+      case 'studyPlans': return mapRows(rows('SELECT * FROM study_plans ORDER BY plan_id'), portableStudyPlan)
+      case 'studyPlanSources': return mapRows(rows('SELECT source_id,plan_id,source_type,source_ref,active,added_at,removed_at,updated_at,device_id FROM study_plan_sources ORDER BY source_id'), portableStudyPlanSource)
+      case 'studyPlanOrigins': return mapRows(rows('SELECT * FROM study_plan_lexeme_origins ORDER BY origin_id'), portableStudyPlanOrigin)
+      case 'studyPlanExclusions': return mapRows(rows('SELECT * FROM study_plan_exclusions ORDER BY plan_id,lexeme_key'), portableStudyPlanExclusion)
+      case 'schedulerProfiles': return mapRows(rows('SELECT * FROM scheduler_profiles ORDER BY profile_id'), portableSchedulerProfile)
+      case 'reviewCards': return mapRows(rows('SELECT * FROM review_cards ORDER BY lexeme_key'), portableReviewCard)
+      case 'reviewEvents': return mapRows(rows('SELECT event_id,command_id,lexeme_key,plan_id,answer,rating,profile_id,pre_card_json,post_card_json,log_json,reviewed_at,device_id FROM review_events ORDER BY event_id'), portableReviewEvent)
+      case 'reinforcementEvents': return mapRows(rows('SELECT event_id,command_id,lexeme_key,plan_id,answer,consecutive_before,consecutive_after,created_at,device_id FROM reinforcement_events ORDER BY event_id'), portableReinforcementEvent)
+      case 'reviewSuspensions': return mapRows(rows('SELECT * FROM review_suspensions ORDER BY lexeme_key'), portableReviewSuspension)
+      case 'studyProgressState': return mapRows(rows('SELECT * FROM study_progress_state ORDER BY state_id'), portableStudyProgressState)
+      case 'studyLexemeResets': return mapRows(rows('SELECT * FROM study_lexeme_resets ORDER BY lexeme_key'), (row): PortableStudyLexemeResetRecord => ({
         lexemeKey: String(row.lexeme_key), resetAt: String(row.reset_at), updatedAt: String(row.updated_at), deviceId: String(row.device_id),
       }))
     }
@@ -175,6 +277,7 @@ export class PortableSqliteRepository {
     policy: PortableMergePolicy = 'newer-wins',
     manageTransaction = true,
     finalizeStudy = true,
+    librarySyncMode: LibrarySyncDataMode = 'auto',
   ): PortableMergeResult {
     const result: PortableMergeResult = {
       publicationLifecycle: 0,
@@ -183,8 +286,29 @@ export class PortableSqliteRepository {
     }
     if (manageTransaction) this.db.exec('BEGIN IMMEDIATE')
     try {
+      for (const row of data.readerRecords ?? []) {
+        validateReaderRecord(row)
+        this.mergeStudyRows('reader_records', ['record_id'], [{ record_id: row.recordId, publication_id: row.publicationId, article_id: row.articleId, kind: row.kind, payload: row.payload, updated_at: row.updatedAt, device_id: row.deviceId }], true, policy)
+      }
       for (const lifecycle of data.publicationLifecycle ?? []) if (this.mergePublicationLifecycle(lifecycle, policy)) result.publicationLifecycle++
-      for (const setting of data.settings) if (this.mergeSetting(setting, policy)) result.settings++
+      let legacyManagementChanged = false
+      let fineGrainedLibraryIncoming = false
+      let libraryManagementIncoming = false
+      for (const setting of data.settings) {
+        const changed = this.mergeSetting(setting, policy)
+        if (changed) result.settings++
+        if (setting.key === 'library.management') {
+          libraryManagementIncoming = true
+          if (changed) legacyManagementChanged = true
+        }
+        if (isLibraryEntitySettingKey(setting.key)) fineGrainedLibraryIncoming = true
+      }
+      reconcileLibraryManagementSettings(this.db, {
+        fineGrainedAuthoritative: (librarySyncMode === 'fine-grained'
+          && (fineGrainedLibraryIncoming || libraryManagementIncoming))
+          || (librarySyncMode === 'auto' && fineGrainedLibraryIncoming),
+        legacyManagementChanged,
+      })
       for (const position of data.readingPositions) if (this.mergeReadingPosition(position, policy)) result.readingPositions++
       for (const lexeme of data.userLexemes) if (this.mergeUserLexeme(lexeme, policy)) result.vocabulary++
       this.mergeStudyRows('lexeme_examples',['example_id'],(data.lexemeExamples??[]).map(example=>({example_id:example.exampleId,lexeme_key:example.lexemeKey,text:example.text,translation_zh:example.translationZh,part_of_speech:example.partOfSpeech,definition:example.definition,provider_id:example.providerId,position:example.position,created_at:example.createdAt,updated_at:example.updatedAt,device_id:example.deviceId})),true,policy)
@@ -203,6 +327,9 @@ export class PortableSqliteRepository {
         this.db.prepare('DELETE FROM review_events WHERE reviewed_at<=?').run(resetAt)
         this.db.prepare('DELETE FROM reinforcement_events WHERE created_at<=?').run(resetAt)
         this.db.prepare('DELETE FROM review_cards WHERE updated_at<=?').run(resetAt)
+        // Activity sessions are device-local, but a synchronized global reset
+        // still has to retire queues that predate the reset tombstone.
+        this.db.prepare('DELETE FROM study_sessions WHERE updated_at<=?').run(resetAt)
       }
       const selectiveResets = new Map((this.db.prepare('SELECT lexeme_key,reset_at FROM study_lexeme_resets').all() as Row[])
         .map((row) => [String(row.lexeme_key), String(row.reset_at)]))
@@ -211,7 +338,8 @@ export class PortableSqliteRepository {
       result.reviewEvents += this.mergeStudyRows('review_events',['event_id'],(data.reviewEvents??[]).filter((row)=>row.reviewedAt>maxReset(resetAt, selectiveResets.get(row.lexemeKey))).map(dbReviewEvent),false,policy)
       result.reinforcementEvents += this.mergeStudyRows('reinforcement_events',['event_id'],(data.reinforcementEvents??[]).filter((row)=>row.createdAt>maxReset(resetAt, selectiveResets.get(row.lexemeKey))).map(dbReinforcementEvent),false,policy)
       result.reviewSuspensions += this.mergeStudyRows('review_suspensions',['lexeme_key'],(data.reviewSuspensions??[]).filter((row)=>row.updatedAt>maxReset(resetAt, selectiveResets.get(row.lexemeKey))).map(dbReviewSuspension),true,policy)
-      if (finalizeStudy && resetAt) this.db.exec('DELETE FROM scheduler_profiles WHERE NOT EXISTS(SELECT 1 FROM review_events WHERE review_events.profile_id=scheduler_profiles.profile_id)')
+      this.reconcileTransientStudyState()
+      if (finalizeStudy && (resetAt || selectiveResets.size > 0)) this.db.exec('DELETE FROM scheduler_profiles WHERE NOT EXISTS(SELECT 1 FROM review_events WHERE review_events.profile_id=scheduler_profiles.profile_id)')
       if (manageTransaction) this.db.exec('COMMIT')
       return result
     } catch (error) {
@@ -252,13 +380,17 @@ export class PortableSqliteRepository {
   }
 
   private mergeSetting(record: PortableSettingRecord, policy: PortableMergePolicy): boolean {
-    if (!['reader.preferences', 'dictionary.preferences', 'study.preferences', 'speech.preferences', 'translation.preferences', 'library.management'].includes(record.key)) return false
+    if (!['reader.preferences', 'dictionary.preferences', 'study.preferences', 'speech.preferences', 'translation.preferences', 'library.management'].includes(record.key)
+      && !isLibraryEntitySettingKey(record.key)) return false
     const current = this.db.prepare('SELECT value,updated_at,device_id FROM settings WHERE key = ?').get(record.key) as Row | undefined
     if (current && String(current.value) === record.value && String(current.updated_at) === record.updatedAt && String(current.device_id) === record.deviceId) return false
     if (current && policy === 'newer-wins' && compareVersionedRecord(record, {
       updatedAt: String(current.updated_at), deviceId: String(current.device_id),
     }) <= 0) return false
-    JSON.parse(record.value)
+    const value: unknown = JSON.parse(record.value)
+    if (isLibraryEntitySettingKey(record.key) && !isValidLibraryEntitySetting(record.key, value)) {
+      throw new Error('书库同步设置记录无效')
+    }
     this.db.prepare(`
       INSERT INTO settings (key, value, updated_at, device_id) VALUES (?, ?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, device_id=excluded.device_id
@@ -322,12 +454,13 @@ export class PortableSqliteRepository {
   }
 
   private mergeStudyRows(table: string, keys: string[], records: Array<Record<string,string|number|null>>, lww: boolean, policy: PortableMergePolicy): number {
-    if (!['study_plans','study_plan_sources','study_plan_lexeme_origins','study_plan_exclusions','scheduler_profiles','review_cards','review_events','reinforcement_events','review_suspensions','study_progress_state','study_lexeme_resets','lexeme_examples'].includes(table)) throw new Error('无效的学习备份表')
+    if (!['reader_records','study_plans','study_plan_sources','study_plan_lexeme_origins','study_plan_exclusions','scheduler_profiles','review_cards','review_events','reinforcement_events','review_suspensions','study_progress_state','study_lexeme_resets','lexeme_examples'].includes(table)) throw new Error('无效的学习备份表')
     let merged=0
     for(const record of records){
       const columns=Object.keys(record)
       if(!keys.every((key)=>columns.includes(key))||columns.some((key)=>!/^[a-z_]+$/.test(key))) throw new Error('学习备份记录无效')
       const current=this.db.prepare(`SELECT * FROM ${table} WHERE ${keys.map((key)=>`${key}=?`).join(' AND ')}`).get(...keys.map((key)=>record[key])) as Row|undefined
+      if (table === 'reader_records' && current && (record.kind === 'translation' || current.kind === 'translation') && (record.payload !== current.payload || record.article_id !== current.article_id || record.publication_id !== current.publication_id || record.kind !== current.kind)) throw new Error('保留译文内容冲突')
       if(current && sameRawRecord(record,current)) continue
       if(current&&(!lww || (policy === 'newer-wins' && compareRawVersion(record,current)<=0))) {
         if (!lww && !sameRawRecord(record,current)) throw new Error(`不可变学习记录冲突：${table}`)
@@ -408,6 +541,26 @@ export class PortableSqliteRepository {
     this.db.prepare('DELETE FROM reinforcement_events WHERE lexeme_key=? AND created_at<=?').run(lexemeKey, resetAt)
     this.db.prepare('DELETE FROM review_cards WHERE lexeme_key=? AND updated_at<=?').run(lexemeKey, resetAt)
     this.db.prepare('DELETE FROM review_suspensions WHERE lexeme_key=? AND updated_at<=?').run(lexemeKey, resetAt)
+    this.db.prepare('DELETE FROM study_session_items WHERE lexeme_key=? AND updated_at<=?').run(lexemeKey, resetAt)
+  }
+
+  private reconcileTransientStudyState(): void {
+    this.db.exec(`
+      DELETE FROM study_session_items
+      WHERE status IN ('pending','revealed')
+        AND plan_id IN (SELECT plan_id FROM study_plans WHERE deleted_at IS NOT NULL);
+    `)
+    const now = new Date().toISOString()
+    this.db.prepare(`
+      UPDATE study_sessions
+      SET status='completed', completed_at=COALESCE(completed_at,?), updated_at=?
+      WHERE status='active'
+        AND NOT EXISTS (
+          SELECT 1 FROM study_session_items
+          WHERE study_session_items.session_id=study_sessions.session_id
+            AND status IN ('pending','revealed')
+        )
+    `).run(now, now)
   }
 }
 

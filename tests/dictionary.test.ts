@@ -69,7 +69,7 @@ describe('dictionary feature', () => {
     const root = temporaryRoot()
     const file = path.join(root, 'reader.sqlite')
     const database = await SqliteApplicationRepository.open(root, 'test')
-    expect(database.getSchemaStatus().schemaVersion).toBe(2)
+    expect(database.getSchemaStatus().schemaVersion).toBe(4)
     database.close()
     const fresh = new DatabaseSync(file, { readOnly: true })
     expect(fresh.prepare("SELECT value FROM app_metadata WHERE key='schema_generation'").get()).toEqual({ value: 'formal-v1' })

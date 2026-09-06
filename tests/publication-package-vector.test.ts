@@ -35,6 +35,11 @@ describe('publication package v2 cross-platform vector', () => {
     legacy.formatVersion = 1
     delete legacy.firstImportedAt
     expect(() => validatePublicationPackageManifest(legacy)).toThrow()
+
+    const unsafeManifest = structuredClone(packageVector.expectedManifest) as Record<string, unknown>
+    unsafeManifest.publicationId = '..\\..\\outside'
+    expect(() => validatePublicationPackageManifest(unsafeManifest)).toThrow()
+    expect(() => validateParsedPublicationPlan({ ...plan, id: '../../outside' })).toThrow()
   })
 })
 

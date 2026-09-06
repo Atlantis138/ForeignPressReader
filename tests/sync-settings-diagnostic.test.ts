@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getSyncDiscoveryNotice } from '../src/renderer/sync-settings'
+import { getSyncDiscoveryNotice, syncCompletionIdentity } from '../src/renderer/sync-settings'
 import type { SyncDeviceSummary, SyncPageState } from '../src/shared/types'
 
 describe('sync discovery diagnostics', () => {
@@ -49,6 +49,20 @@ describe('sync discovery diagnostics', () => {
     expect(getSyncDiscoveryNotice(discoveryState(null))).toBeNull()
     expect(getSyncDiscoveryNotice(discoveryState('请允许访问本地网络。'))?.message)
       .toContain('请允许访问本地网络。')
+  })
+
+  it('gives each completed transfer a stable UI refresh identity', () => {
+    const result = {
+      direction: 'receiving' as const,
+      peerName: 'Windows',
+      completedAt: '2026-07-31T10:00:00.000Z',
+      appliedRecords: 3,
+      unchangedRecords: 1,
+      importedPublications: 0,
+    }
+    expect(syncCompletionIdentity(result)).toBe(syncCompletionIdentity({ ...result }))
+    expect(syncCompletionIdentity({ ...result, appliedRecords: 4 })).not.toBe(syncCompletionIdentity(result))
+    expect(syncCompletionIdentity(null)).toBeNull()
   })
 })
 

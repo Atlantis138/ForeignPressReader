@@ -1,3 +1,4 @@
+import type { ReaderRecord } from './reader-records'
 export interface PortableSettingRecord {
   key: string
   value: string
@@ -212,6 +213,7 @@ export interface PortableSavedContextRecord {
 }
 
 export interface PortableUserData {
+  readerRecords?: ReaderRecord[]
   publicationLifecycle: PortablePublicationLifecycleRecord[]
   settings: PortableSettingRecord[]
   readingPositions: PortableReadingPositionRecord[]
@@ -233,6 +235,7 @@ export interface PortableUserData {
 }
 
 export const PORTABLE_DATASET_KEYS = [
+  'readerRecords',
   'publicationLifecycle',
   'settings',
   'readingPositions',
@@ -254,7 +257,7 @@ export const PORTABLE_DATASET_KEYS = [
 ] as const
 
 export type PortableDatasetKey = typeof PORTABLE_DATASET_KEYS[number]
-export type PortableDatasetRecord = PortableUserData[PortableDatasetKey][number]
+export type PortableDatasetRecord = NonNullable<PortableUserData[PortableDatasetKey]>[number]
 
 export interface PortableBookRecord {
   publicationId: string

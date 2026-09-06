@@ -62,11 +62,12 @@ pub use model::{
 };
 pub use online_speech::{
     cancel_mobile_translation, delete_mobile_speech_api_key, delete_mobile_translation_api_key,
-    get_mobile_speech_settings, get_mobile_translation_settings, pause_mobile_speech,
-    play_mobile_speech, resume_mobile_speech, save_mobile_speech_api_key,
+    get_mobile_speech_queue_state, get_mobile_speech_settings, get_mobile_translation_settings,
+    pause_mobile_speech, play_mobile_speech, resume_mobile_speech, save_mobile_speech_api_key,
     save_mobile_speech_preferences, save_mobile_translation_api_key,
-    save_mobile_translation_preferences, stop_mobile_speech, test_mobile_speech_connection,
-    test_mobile_translation_connection, translate_mobile_article,
+    save_mobile_translation_preferences, seek_mobile_speech_queue, start_mobile_speech_queue,
+    stop_mobile_speech, test_mobile_speech_connection, test_mobile_translation_connection,
+    translate_mobile_article,
 };
 pub use platform::get_platform_info;
 pub use reading::{
@@ -74,8 +75,9 @@ pub use reading::{
     create_mobile_library_category, delete_mobile_library_category, delete_mobile_publications,
     get_mobile_article, get_mobile_library_state, get_mobile_publication,
     get_mobile_reader_preferences, list_mobile_publications, read_epub_text_entry,
-    rename_mobile_library_category, rename_mobile_publication, save_mobile_library_preferences,
-    save_mobile_reader_preferences, save_mobile_reading_position,
+    reader_change_data, reader_get_data, reader_search_articles, rename_mobile_library_category,
+    rename_mobile_publication, save_mobile_library_preferences, save_mobile_reader_preferences,
+    save_mobile_reading_position,
 };
 pub use study::{
     add_mobile_study_extra_batch, commit_mobile_study_answer_v2, create_mobile_study_plan,

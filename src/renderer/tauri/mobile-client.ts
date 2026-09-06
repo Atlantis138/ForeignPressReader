@@ -113,6 +113,9 @@ export class TauriMobileReadingClient implements MobileReadingClient {
   }
 
   readonly reader: ReaderApi = {
+    searchArticles: (query) => this.invokeSafely('reader_search_articles', { query }),
+    getReadingData: (articleId) => this.invokeSafely('reader_get_data', { articleId }),
+    changeReadingData: async (articleId, change) => { const result = await this.invokeSafely<import('../../shared/reader-types').ArticleReadingData>('reader_change_data', { articleId, change }); return result },
     getArticle: (articleId) => this.getArticle(articleId),
     savePosition: (publicationId, articleId, position) => this.savePosition(publicationId, articleId, position),
     getPreferences: () => this.getPreferences(),
@@ -142,7 +145,7 @@ export class TauriMobileReadingClient implements MobileReadingClient {
         sessionId: begin.sessionId,
         parsedPlan: plan,
       })
-      this.emit('completed', 1, 1, result.duplicate ? '出版物已存在' : '导入完成')
+      this.emit('completed', 1, 1, result.repaired ? '已重新解析并补全刊物' : result.duplicate ? '出版物已存在' : '导入完成')
       return result
     } catch (reason) {
       const error = normalizePlatformError(reason)

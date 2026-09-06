@@ -53,6 +53,7 @@ pub async fn translate_mobile_article(
     app: tauri::AppHandle,
     state: tauri::State<'_, PlatformState>,
     article_id: String,
+    force: Option<bool>,
 ) -> Result<mobile_online::TranslationResult, PlatformError> {
     state.online_runtime().begin_translation(&article_id)?;
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -65,7 +66,15 @@ pub async fn translate_mobile_article(
             mobile_online::get_preferences(&database)?
         };
         let key = mobile_online::translation_key(&app, &preferences)?;
-        mobile_online::translate_article(&app, &state, &article_id, &request_id, &key, &preferences)
+        mobile_online::translate_article(
+            &app,
+            &state,
+            &article_id,
+            &request_id,
+            &key,
+            &preferences,
+            force.unwrap_or(false),
+        )
     })();
     state.online_runtime().finish_translation(&article_id);
     if let Err(error) = &result {
@@ -146,16 +155,53 @@ pub fn play_mobile_speech(
 }
 
 #[tauri::command]
-pub fn pause_mobile_speech(app: tauri::AppHandle) -> Result<(), PlatformError> {
-    mobile_speech::pause(&app)
+pub async fn pause_mobile_speech(app: tauri::AppHandle) -> Result<(), PlatformError> {
+    tauri::async_runtime::spawn_blocking(move || mobile_speech::pause(&app))
+        .await
+        .map_err(|_| PlatformError::storage_unavailable())?
 }
 
 #[tauri::command]
-pub fn resume_mobile_speech(app: tauri::AppHandle) -> Result<(), PlatformError> {
-    mobile_speech::resume(&app)
+pub async fn resume_mobile_speech(app: tauri::AppHandle) -> Result<(), PlatformError> {
+    tauri::async_runtime::spawn_blocking(move || mobile_speech::resume(&app))
+        .await
+        .map_err(|_| PlatformError::storage_unavailable())?
 }
 
 #[tauri::command]
-pub fn stop_mobile_speech(app: tauri::AppHandle) -> Result<(), PlatformError> {
-    mobile_speech::stop(&app)
+pub async fn stop_mobile_speech(app: tauri::AppHandle) -> Result<(), PlatformError> {
+    tauri::async_runtime::spawn_blocking(move || mobile_speech::stop(&app))
+        .await
+        .map_err(|_| PlatformError::storage_unavailable())?
+}
+
+#[tauri::command]
+pub async fn start_mobile_speech_queue(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PlatformState>,
+    request: crate::mobile_speech_queue::QueueRequest,
+) -> Result<(), PlatformError> {
+    let paths = state.paths.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::mobile_speech_queue::start(app, paths, request)
+    })
+    .await
+    .map_err(|_| PlatformError::storage_unavailable())?
+}
+#[tauri::command]
+pub async fn get_mobile_speech_queue_state(
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, PlatformError> {
+    tauri::async_runtime::spawn_blocking(move || crate::mobile_speech_queue::state(&app))
+        .await
+        .map_err(|_| PlatformError::storage_unavailable())?
+}
+#[tauri::command]
+pub async fn seek_mobile_speech_queue(
+    app: tauri::AppHandle,
+    index: usize,
+) -> Result<(), PlatformError> {
+    tauri::async_runtime::spawn_blocking(move || crate::mobile_speech_queue::seek(&app, index))
+        .await
+        .map_err(|_| PlatformError::storage_unavailable())?
 }

@@ -1,3 +1,5 @@
+import { canonicalJson } from '../canonical-json'
+export { canonicalJson } from '../canonical-json'
 import type {
   MobileReviewTransitionProposal,
   StoredReviewCardContract,
@@ -53,12 +55,6 @@ export function reviewCardFingerprint(card: StoredReviewCardContract): string {
   ].join('\u001f'))
 }
 
-export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  const record = value as Record<string, unknown>
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
-}
 
 function float64Bits(value: number): string {
   if (!Number.isFinite(value)) throw new Error('复习卡数值无效')

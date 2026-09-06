@@ -9,12 +9,14 @@ pub mod dictionary_query;
 pub mod dictionary_runtime;
 pub mod epub_import;
 pub mod learning_contract;
+pub mod library_sync_settings;
 pub mod mobile_dictionary_online;
 pub mod mobile_maintenance;
 pub mod mobile_online;
 pub mod mobile_portable;
 pub mod mobile_reading;
 pub mod mobile_speech;
+mod mobile_speech_queue;
 pub mod mobile_study;
 pub mod mobile_sync;
 pub mod mobile_sync_runtime;
@@ -24,6 +26,9 @@ pub mod platform_paths;
 mod platform_state;
 mod portable_commands;
 pub mod publication_package;
+mod publication_repair;
+mod reader_records;
+mod startup_recovery;
 mod sync_commands;
 
 use percent_encoding::percent_decode_str;
@@ -48,7 +53,10 @@ pub fn run() {
                     .trim_start_matches('/')
                     .split('/')
                     .collect::<Vec<_>>();
-                let state = context.app_handle().state::<PlatformState>();
+                let state = context
+                    .app_handle()
+                    .try_state::<PlatformState>()
+                    .ok_or(())?;
                 if parts.len() >= 3 && parts[0] == "asset" {
                     let publication_id =
                         percent_decode_str(parts[1]).decode_utf8().map_err(|_| ())?;
@@ -133,11 +141,23 @@ pub fn run() {
                 app.path().app_cache_dir()?,
                 app.path().app_log_dir()?,
             );
-            let state = PlatformState::new(paths, &app.package_info().version.to_string())?;
-            app.manage(state);
+            let result = PlatformState::new(paths.clone(), &app.package_info().version.to_string());
+            let error = match result {
+                Ok(state) => {
+                    app.manage(state);
+                    None
+                }
+                Err(error) => Some(error),
+            };
+            app.manage(startup_recovery::StartupRecovery {
+                paths,
+                error: std::sync::Mutex::new(error),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            startup_recovery::get_startup_recovery,
+            startup_recovery::restore_startup_snapshot,
             commands::get_platform_info,
             commands::get_mobile_dictionary_status,
             commands::get_mobile_dictionary_center_status,
@@ -208,6 +228,7 @@ pub fn run() {
             sync_commands::reject_mobile_sync_pairing,
             sync_commands::send_mobile_sync_to,
             sync_commands::accept_mobile_sync_incoming,
+            sync_commands::get_mobile_sync_incoming_changes,
             sync_commands::reject_mobile_sync_incoming,
             sync_commands::cancel_mobile_sync_operation,
             sync_commands::discard_mobile_sync_pending_transfer,
@@ -227,6 +248,9 @@ pub fn run() {
             commands::assign_mobile_publications,
             commands::delete_mobile_publications,
             commands::get_mobile_publication,
+            commands::reader_search_articles,
+            commands::reader_get_data,
+            commands::reader_change_data,
             commands::get_mobile_article,
             commands::save_mobile_reading_position,
             commands::get_mobile_reader_preferences,
@@ -244,6 +268,9 @@ pub fn run() {
             commands::delete_mobile_speech_api_key,
             commands::test_mobile_speech_connection,
             commands::play_mobile_speech,
+            commands::start_mobile_speech_queue,
+            commands::get_mobile_speech_queue_state,
+            commands::seek_mobile_speech_queue,
             commands::pause_mobile_speech,
             commands::resume_mobile_speech,
             commands::stop_mobile_speech,

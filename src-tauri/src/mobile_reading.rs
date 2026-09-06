@@ -204,6 +204,7 @@ pub struct ReaderPreferences {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {
+    pub repaired: bool,
     pub publication: PublicationDetail,
     pub duplicate: bool,
 }
@@ -600,6 +601,7 @@ pub fn get_publication(
 }
 
 pub fn get_article(database: &AndroidDatabase, id: &str) -> Result<ArticleDetail, PlatformError> {
+    let selected = crate::reader_records::selected(database, id)?;
     let connection = database.connection();
     let management = load_library_management(connection)?;
     let translation_preferences = mobile_online::get_preferences(database)?;
@@ -629,7 +631,7 @@ pub fn get_article(database: &AndroidDatabase, id: &str) -> Result<ArticleDetail
         )
         .map_err(|_| PlatformError::database_corrupt())?;
     let mut translation_statement = connection.prepare(
-        "SELECT text FROM translations WHERE block_id=?1 AND source_hash=?2 AND target_language='zh-CN' AND model=?3 AND prompt_version=?4 ORDER BY created_at DESC LIMIT 1",
+        "SELECT text FROM translations WHERE block_id=?1 AND source_hash=?2 AND target_language='zh-CN' ORDER BY (model=?3 AND prompt_version=?4) DESC,created_at DESC LIMIT 1",
     ).map_err(|_| PlatformError::database_corrupt())?;
     let blocks = block_statement
         .query_map([id], |block| {
@@ -649,6 +651,18 @@ pub fn get_article(database: &AndroidDatabase, id: &str) -> Result<ArticleDetail
                     .optional()?
             } else {
                 None
+            };
+            let translation = if let Some(segments) = &selected {
+                let block_id: String = block.get(0)?;
+                let hash = hex::encode(Sha256::digest(
+                    text.as_deref().unwrap_or_default().as_bytes(),
+                ));
+                segments
+                    .get(&block_id)
+                    .filter(|segment| segment["sourceHash"].as_str() == Some(hash.as_str()))
+                    .and_then(|segment| segment["text"].as_str().map(str::to_owned))
+            } else {
+                translation
             };
             Ok(ContentBlock {
                 id: block.get(0)?,
@@ -683,12 +697,12 @@ pub fn get_article(database: &AndroidDatabase, id: &str) -> Result<ArticleDetail
         publication_title,
         section_title: row.8,
         blocks,
-        saved_position: ReadingPosition {
+        saved_position: crate::reader_records::position(database, id)?.unwrap_or(ReadingPosition {
             scroll_top: row.9.unwrap_or(0.0),
             anchor_block_id: row.10,
             anchor_token_index: row.11,
             anchor_fraction: row.12.unwrap_or(0.0),
-        },
+        }),
     })
 }
 
@@ -1196,7 +1210,7 @@ pub fn validate_archive_path(value: &str) -> Result<(), PlatformError> {
     Ok(())
 }
 
-fn validate_plan(parsed: &ParsedPublicationPlan) -> Result<(), PlatformError> {
+pub(crate) fn validate_plan(parsed: &ParsedPublicationPlan) -> Result<(), PlatformError> {
     validate_id(&parsed.id, "刊物")?;
     if !parsed.id.starts_with("pub_")
         || !is_hash(&parsed.hash, 64)
@@ -1411,16 +1425,9 @@ fn write_library_management(
     device_id: &str,
     management: &LibraryManagementRecord,
 ) -> Result<(), PlatformError> {
-    let encoded =
-        serde_json::to_string(management).map_err(|_| PlatformError::storage_unavailable())?;
-    connection
-        .execute(
-            "INSERT INTO settings(key,value,updated_at,device_id) VALUES('library.management',?1,?2,?3) \
-             ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,device_id=excluded.device_id",
-            params![encoded, now(), device_id],
-        )
-        .map_err(|_| PlatformError::storage_unavailable())?;
-    Ok(())
+    let value =
+        serde_json::to_value(management).map_err(|_| PlatformError::storage_unavailable())?;
+    crate::library_sync_settings::write_management(connection, device_id, &value)
 }
 
 fn library_preferences_of(management: &LibraryManagementRecord) -> LibraryPreferences {
@@ -1737,6 +1744,16 @@ mod tests {
         let article = get_article(&database, article_id).expect("article");
         assert_eq!(article.publication_title, "Fixture 精读");
         assert_eq!(article.blocks[0].translation.as_deref(), Some("当前译文"));
+        database.connection().execute(
+            "UPDATE translations SET model='previous-model',prompt_version='previous-prompt' WHERE source_hash=?1",
+            [&source_hash],
+        ).expect("change cached model");
+        assert_eq!(
+            get_article(&database, article_id).expect("fallback").blocks[0]
+                .translation
+                .as_deref(),
+            Some("当前译文")
+        );
 
         let state = delete_category(&database, &state.categories[0].id).expect("delete category");
         assert!(state.categories.is_empty());

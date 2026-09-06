@@ -62,52 +62,5 @@ describe('Android E3 study center', () => {
     expect(app).toContain("navigate({ name: 'study-session' })")
   })
 
-  it('covers plan sources, quotas, lifecycle, diagnostics and word actions', async () => {
-    const page = await readText('src/renderer/tauri/mobile-study-pages.tsx')
-    expect(page).toContain('client.listDictionaryCollections()')
-    expect(page).toContain("{ type: 'reader_manual', ref: 'favorite' }")
-    expect(page).toContain('dailyNewLimit')
-    expect(page).toContain('dailyReviewLimit')
-    expect(page).toContain("changeStatus(detail.status === 'active' ? 'paused' : 'active')")
-    expect(page).toContain("changeStatus('archived')")
-    expect(page).toContain('client.syncSources(planId)')
-    for (const diagnostic of ['word.difficulty', 'word.stability', 'word.retrievability', 'word.reps', 'word.lapses']) {
-      expect(page).toContain(diagnostic)
-    }
-    expect(page).toContain('client.setWordExcluded(')
-    expect(page).toContain('client.setWordSuspended(')
-    expect(page).toContain('debug?.enabled')
-    expect(page).toContain('client.deletePlan(planId, deleteName, { resetWordProgress })')
-    expect(page).toContain('deleteName !== detail.name')
-    expect(page).toContain('MobileDistributionDonut')
-    expect(page).toContain('查看熟练度、复习安排与计划词表。')
-    for (const label of ['今日待复习', '暂停复习', '已排除']) expect(page).toContain(label)
-    expect(page).not.toContain('计划词表筛选')
-  })
-
-  it('keeps the two-stage answer, correction, reinforcement and too-easy undo flow explicit', async () => {
-    const page = await readText('src/renderer/tauri/mobile-study-pages.tsx')
-    expect(page).toContain("stage('known')")
-    expect(page).toContain("stage('unknown')")
-    expect(page).toContain("commit('known')")
-    expect(page).toContain("commit('unknown')")
-    expect(page).toContain("current.proposedAnswer === 'known'")
-    expect(page).toContain('client.markTooEasy(')
-    expect(page).toContain('undoTooEasy')
-    expect(page).toContain('window.setTimeout(() => setUndo(null)')
-    expect(page).toContain('client.addExtraBatch(')
-  })
-
-  it('persists all user-facing queue and FSRS settings for the next batch', async () => {
-    const page = await readText('src/renderer/tauri/mobile-study-pages.tsx')
-    expect(page).toContain('draft.queueOrder')
-    expect(page).toContain('draft.cutoffHour')
-    expect(page).toContain('draft.requestRetention')
-    expect(page).toContain('draft.maximumInterval')
-    expect(page).toContain('min="0" max="23"')
-    expect(page).toContain('min="0.8" max="0.95" step="0.01"')
-    expect(page).toContain('min="30" max="36500"')
-    expect(page).toContain('client.savePreferences(draft)')
-    expect(page).toContain('下一批任务生效')
-  })
+  // Study behavior is exercised by mobile-study-loading.test.ts and the shared study suites.
 })

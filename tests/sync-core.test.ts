@@ -10,14 +10,14 @@ import {
   SYNC_MODEL_VERSION,
   type LogicalRecordV1,
   type SyncEntityRef,
-  type SyncPeerSummaryV2,
+  type SyncPeerSummaryV3,
 } from '../src/core/sync-model'
 
 const ref = (type: SyncEntityRef['type'], key: string, revision: number): SyncEntityRef => ({
   type, key, revision,
 })
 
-const peer = (overrides: Partial<SyncPeerSummaryV2> = {}): SyncPeerSummaryV2 => ({
+const peer = (overrides: Partial<SyncPeerSummaryV3> = {}): SyncPeerSummaryV3 => ({
   modelVersion: SYNC_MODEL_VERSION,
   deviceId: 'peer-b',
   currentRevision: 20,
@@ -166,7 +166,7 @@ describe('sync core model', () => {
     })
 
     expect(batch).toMatchObject({
-      modelVersion: 2,
+      modelVersion: SYNC_MODEL_VERSION,
       batchId: 'batch-1',
       mode: 'snapshot',
       fromSenderRevisionExclusive: null,

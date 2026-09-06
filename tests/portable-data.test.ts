@@ -20,6 +20,37 @@ afterEach(() => {
 })
 
 describe('portable essential-user-data archive', () => {
+  it('does not roll back committed data when obsolete-file cleanup fails', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-portable-cleanup-'))
+    roots.push(root)
+    const database = {
+      createSafetyBackup: vi.fn().mockResolvedValue(undefined),
+      clearPublicationLifecycleForRestore: vi.fn(), beginPortableMerge: vi.fn(),
+      commitPortableMerge: vi.fn(), rollbackPortableMerge: vi.fn(),
+      getPublicationLifecycle: () => ({ state: 'deleted' }),
+    }
+    const library = { purgeImportedPublication: vi.fn().mockResolvedValue(undefined) }
+    const service = new PortableDataService(database as never, library as never, root, 'test', () => undefined)
+    // Inject the validated stage, then fault the filesystem only after COMMIT.
+    const internals = service as unknown as {
+      staged: Map<string, unknown>
+      publicationPackages: { importPackage: () => Promise<unknown> }
+      mergePortableFiles: () => Promise<unknown>
+    }
+    internals.staged.set('test', { root: path.join(root, 'stage'), fileName: 'test.fprbackup',
+      manifest: { formatVersion: 3 }, totalBytes: 100,
+      books: [{ path: 'validated.fprpub', hash: 'a'.repeat(64), lifecycle: { publicationId: 'new', formatId: 'epub' } }],
+    })
+    vi.spyOn(internals.publicationPackages, 'importPackage').mockResolvedValue({ duplicate: false, publication: { id: 'new' } })
+    vi.spyOn(internals, 'mergePortableFiles').mockResolvedValue({ merged: {}, deletedPublicationIds: ['old'] })
+    const remove = vi.spyOn(fs.promises, 'rm').mockRejectedValue(new Error('file locked'))
+    try {
+      await expect(service.confirmImport('test')).resolves.toMatchObject({ importedPublications: 1 })
+      expect(database.commitPortableMerge).toHaveBeenCalledOnce()
+      expect(database.rollbackPortableMerge).not.toHaveBeenCalled()
+      expect(library.purgeImportedPublication).not.toHaveBeenCalled()
+    } finally { remove.mockRestore() }
+  })
   it('preserves the previous backup when the atomic replacement fails', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-portable-replace-'))
     roots.push(root)
@@ -85,7 +116,7 @@ describe('portable essential-user-data archive', () => {
     const archive = await JSZip.loadAsync(fs.readFileSync(backupPath))
     const names = Object.keys(archive.files).filter((name) => !archive.files[name].dir)
     const manifest = JSON.parse(await archive.file('manifest.json')!.async('text')) as { formatVersion: number }
-    expect(manifest.formatVersion).toBe(2)
+    expect(manifest.formatVersion).toBe(4)
     expect(names).toContain('manifest.json')
     expect(names).toContain('data/settings.json')
     expect(names).toContain('data/publication-lifecycle.ndjson')
@@ -111,6 +142,26 @@ describe('portable essential-user-data archive', () => {
     const settings = JSON.parse(await archive.file('data/settings.json')!.async('text')) as Array<{ key: string }>
     expect(settings.some((setting) => setting.key === 'translation.preferences')).toBe(true)
     expect(settings.some((setting) => setting.key === 'library.management')).toBe(true)
+    expect(settings.some((setting) => setting.key.startsWith('library.category.'))).toBe(true)
+    expect(settings.some((setting) => setting.key.startsWith('library.item.'))).toBe(true)
+
+    const legacyV2Path = path.join(root, 'portable-v2-compatible.fprbackup')
+    fs.writeFileSync(legacyV2Path, await downgradePortableArchiveToV2(archive))
+    const legacyTargetRoot = path.join(root, 'legacy-target')
+    const legacyTargetDb = await SqliteApplicationRepository.open(legacyTargetRoot, '0.3.0-test')
+    const legacyTargetLibrary = new LibraryService(legacyTargetDb, epubFormats(), legacyTargetRoot)
+    const legacyTargetService = new PortableDataService(legacyTargetDb, legacyTargetLibrary, legacyTargetRoot, '0.3.0-test', () => undefined)
+    const legacyPreview = await legacyTargetService.inspectImport(legacyV2Path)
+    await legacyTargetService.confirmImport(legacyPreview.token)
+    expect(legacyTargetDb.getLibraryState()).toMatchObject({
+      publications: [{ title: '便携书名', categoryId: libraryCategoryId }],
+      categories: [{ id: libraryCategoryId, name: '经济周刊' }],
+    })
+    expect((legacyTargetDb.getConnection().prepare(
+      "SELECT COUNT(*) AS count FROM settings WHERE key LIKE 'library.category.%' OR key LIKE 'library.item.%'",
+    ).get() as { count: number }).count).toBe(2)
+    legacyTargetService.close()
+    legacyTargetDb.close()
 
     // Repack every entry with DEFLATE to verify both ZIP storage modes.
     const repackedArchive = new JSZip()
@@ -200,7 +251,7 @@ describe('portable essential-user-data archive', () => {
     expect(backups).toHaveLength(5)
 
     const snapshot = new DatabaseSync(latest, { readOnly: true })
-    expect(snapshot.prepare('PRAGMA user_version').get()).toEqual({ user_version: 2 })
+    expect(snapshot.prepare('PRAGMA user_version').get()).toEqual({ user_version: 4 })
     expect(snapshot.prepare("SELECT value FROM app_metadata WHERE key='schema_generation'").get()).toEqual({ value: 'formal-v1' })
     expect(snapshot.prepare("SELECT value FROM app_metadata WHERE key='device_id'").get()).toEqual({ value: database.getDeviceId() })
     expect(snapshot.prepare("SELECT value FROM settings WHERE key='backup.sentinel'").get()).toEqual({ value: 'preserved' })
@@ -263,9 +314,35 @@ describe('portable essential-user-data archive', () => {
     fs.writeFileSync(legacyPath, await legacy.generateAsync({ type: 'nodebuffer' }))
     await expect(service.inspectImport(legacyPath)).rejects.toThrow('不受支持')
 
+    const safeEmptyPath = path.join(root, 'safe-empty.fprbackup')
+    await service.exportPortable(safeEmptyPath)
+    const unsafeArchive = await JSZip.loadAsync(fs.readFileSync(safeEmptyPath))
+    const unsafeLifecycle = JSON.stringify({
+      publicationId: '../../outside',
+      contentHash: 'a'.repeat(64),
+      formatId: 'epub',
+      titleSnapshot: 'Unsafe',
+      state: 'deleted',
+      changedAt: '2026-07-31T00:00:00.000Z',
+      deviceId: 'unsafe-device',
+    })
+    unsafeArchive.file('data/publication-lifecycle.ndjson', `${unsafeLifecycle}\n`)
+    const unsafeManifest = JSON.parse(await unsafeArchive.file('manifest.json')!.async('text')) as {
+      files: Array<{ path: string; size: number; sha256: string }>
+    }
+    unsafeManifest.files = unsafeManifest.files.map((file) => file.path === 'data/publication-lifecycle.ndjson' ? {
+      ...file,
+      size: Buffer.byteLength(`${unsafeLifecycle}\n`),
+      sha256: createHash('sha256').update(`${unsafeLifecycle}\n`).digest('hex'),
+    } : file)
+    unsafeArchive.file('manifest.json', JSON.stringify(unsafeManifest))
+    const unsafePath = path.join(root, 'unsafe-publication-id.fprbackup')
+    fs.writeFileSync(unsafePath, await unsafeArchive.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
+    await expect(service.inspectImport(unsafePath)).rejects.toThrow('刊物生命周期')
+
     const demoV4 = new JSZip()
     demoV4.file('manifest.json', JSON.stringify({
-      format: 'foreign-press-reader-portable', formatVersion: 4, appVersion: '0.5.6',
+      format: 'foreign-press-reader-portable', formatVersion: 99, appVersion: '0.5.6',
       databaseSchemaVersion: 1, contentIdVersion: 2, createdAt: new Date().toISOString(),
       policy: 'essential-user-data', files: [], counts: {},
     }))
@@ -358,6 +435,37 @@ async function emptyDemoBackup(version: number): Promise<Buffer> {
     counts: { publications:0,settings:0,readingPositions:0,vocabulary:0,vocabularySources:0,savedContexts:0,studyPlans:0,reviewCards:0,reviewEvents:0,reinforcementEvents:0,reviewSuspensions:0 },
   }))
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+}
+
+async function downgradePortableArchiveToV2(source: JSZip): Promise<Buffer> {
+  const destination = new JSZip()
+  const manifest = JSON.parse(await source.file('manifest.json')!.async('text')) as {
+    formatVersion: number
+    databaseSchemaVersion: number
+    files: Array<{ path: string; size: number; sha256: string; kind: string }>
+    counts: Record<string, number>
+  }
+  const settings = JSON.parse(await source.file('data/settings.json')!.async('text')) as Array<{ key: string }>
+  const legacySettings = JSON.stringify(settings.filter((setting) => (
+    !setting.key.startsWith('library.category.') && !setting.key.startsWith('library.item.')
+  )))
+  for (const [name, entry] of Object.entries(source.files)) {
+    if (entry.dir || name === 'manifest.json' || name === 'data/settings.json' || name === 'data/reader-records.ndjson') continue
+    destination.file(name, await entry.async('uint8array'))
+  }
+  destination.file('data/settings.json', legacySettings)
+  delete manifest.counts.readerRecords
+  manifest.files = manifest.files.filter(file=>file.path!=='data/reader-records.ndjson')
+  manifest.formatVersion = 2
+  manifest.databaseSchemaVersion = 2
+  manifest.counts.settings = JSON.parse(legacySettings).length
+  manifest.files = manifest.files.map((file) => file.path === 'data/settings.json' ? {
+    ...file,
+    size: Buffer.byteLength(legacySettings),
+    sha256: createHash('sha256').update(legacySettings).digest('hex'),
+  } : file)
+  destination.file('manifest.json', JSON.stringify(manifest))
+  return destination.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
 }
 
 async function syntheticEpub(): Promise<Buffer> {

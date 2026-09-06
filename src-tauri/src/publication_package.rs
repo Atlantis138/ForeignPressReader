@@ -248,9 +248,19 @@ pub fn restore(
     inspected: &InspectedPackage,
 ) -> Result<mobile_reading::ImportResult, PlatformError> {
     if let Some(id) = mobile_reading::find_publication_by_hash(database, &inspected.plan.hash)? {
+        if id != inspected.plan.id {
+            return Err(invalid_package("刊物身份不一致。"));
+        }
+        crate::publication_repair::copy_missing_assets(
+            &inspected.root.join("assets"),
+            &library_root.join(&id).join("assets"),
+            &inspected.plan.asset_paths,
+        )?;
+        let repaired = crate::publication_repair::repair(database, &inspected.plan)?;
         return Ok(mobile_reading::ImportResult {
             publication: mobile_reading::get_publication(database, &id)?,
             duplicate: true,
+            repaired,
         });
     }
     let final_root = library_root.join(&inspected.plan.id);
@@ -294,6 +304,7 @@ pub fn restore(
     Ok(mobile_reading::ImportResult {
         publication: mobile_reading::get_publication(database, &inspected.plan.id)?,
         duplicate: false,
+        repaired: false,
     })
 }
 
@@ -475,7 +486,7 @@ fn validate_manifest(
         || manifest.content_id_version != CONTENT_ID_VERSION
         || manifest.plan_path != "publication.json"
         || !is_sha256(&manifest.source_content_sha256)
-        || manifest.publication_id.is_empty()
+        || !is_safe_publication_id(&manifest.publication_id)
         || !valid_source_format(&manifest.source_format)
     {
         return Err(invalid_package("不支持此刊物包格式或版本。"));
@@ -539,7 +550,7 @@ fn valid_source_format(value: &str) -> bool {
 }
 
 fn valid_plan(plan: &ParsedPublicationPlan) -> bool {
-    if plan.id.is_empty()
+    if !is_safe_publication_id(&plan.id)
         || !is_sha256(&plan.hash)
         || plan.source_key.is_empty()
         || plan.profile_id.is_empty()
@@ -590,6 +601,13 @@ fn valid_plan(plan: &ParsedPublicationPlan) -> bool {
         return false;
     }
     article_count > 0
+}
+
+pub(crate) fn is_safe_publication_id(value: &str) -> bool {
+    (8..=80).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 fn valid_article(
@@ -721,6 +739,13 @@ mod tests {
         let mut legacy = manifest.clone();
         legacy.format_version = 1;
         assert!(validate_manifest(&legacy, &names).is_err());
+
+        let mut unsafe_manifest = manifest;
+        unsafe_manifest.publication_id = "../../outside".into();
+        assert!(validate_manifest(&unsafe_manifest, &names).is_err());
+        let mut unsafe_plan = plan;
+        unsafe_plan.id = "../../outside".into();
+        assert!(!valid_plan(&unsafe_plan));
     }
 
     #[test]

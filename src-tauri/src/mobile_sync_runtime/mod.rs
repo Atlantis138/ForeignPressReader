@@ -320,8 +320,8 @@ mod view;
 
 pub use lifecycle::{
     accept_incoming, cancel_operation, close_page, confirm_pairing, discard_pending_transfer,
-    get_state, open_page, refresh_discovery_now, reject_incoming, reject_pairing, revoke_trust,
-    send_to, start_pairing,
+    get_state, incoming_changes, open_page, refresh_discovery_now, reject_incoming, reject_pairing,
+    revoke_trust, send_to, start_pairing,
 };
 
 #[allow(unused_imports)]

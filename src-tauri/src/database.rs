@@ -9,8 +9,10 @@ use uuid::Uuid;
 const FORMAL_V1_SQL: &str = include_str!("../migrations/0001_formal_v1.sql");
 const PARSED_PUBLICATION_STORAGE_V2_SQL: &str =
     include_str!("../migrations/0002_parsed_publication_storage.sql");
+const FINE_GRAINED_LIBRARY_SYNC_V3_SQL: &str =
+    include_str!("../migrations/0003_fine_grained_library_sync.sql");
 pub const SCHEMA_GENERATION: &str = "formal-v1";
-pub const LATEST_SCHEMA_VERSION: i64 = 2;
+pub const LATEST_SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +45,17 @@ impl AndroidDatabase {
         connection
             .pragma_update(None, "foreign_keys", true)
             .map_err(|_| PlatformError::database_corrupt())?;
+        if existed
+            && metadata(&connection, "schema_generation").is_ok_and(|g| g == SCHEMA_GENERATION)
+            && schema_version(&connection)? > 0
+            && schema_version(&connection)? < LATEST_SCHEMA_VERSION
+        {
+            crate::startup_recovery::snapshot(
+                &connection,
+                &paths.data.join("backups/migrations"),
+                "before-migration",
+            )?;
+        }
         initialize(&mut connection, app_version, false)?;
         connection
             .pragma_update(None, "journal_mode", "WAL")
@@ -133,6 +146,18 @@ fn initialize(
         if version < 2 {
             migrate_parsed_publication_storage_v2(&transaction, app_version)?;
         }
+        if version < 3 {
+            migrate_fine_grained_library_sync_v3(&transaction, app_version)?;
+        }
+        if version < 4 {
+            transaction
+                .execute_batch(include_str!("../migrations/0004_reader_records.sql"))
+                .map_err(|_| PlatformError::migration_failed())?;
+            transaction.execute("INSERT INTO migration_history(version,name,applied_at,app_version) VALUES(4,'reader-records',?1,?2)", [Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true), app_version.to_owned()]).map_err(|_| PlatformError::migration_failed())?;
+            transaction
+                .pragma_update(None, "user_version", 4)
+                .map_err(|_| PlatformError::migration_failed())?;
+        }
         if inject_failure {
             return Err(PlatformError::migration_failed());
         }
@@ -202,6 +227,26 @@ fn migrate_parsed_publication_storage_v2(
         .map_err(|_| PlatformError::migration_failed())?;
     transaction
         .pragma_update(None, "user_version", 2)
+        .map_err(|_| PlatformError::migration_failed())?;
+    Ok(())
+}
+
+fn migrate_fine_grained_library_sync_v3(
+    transaction: &Transaction<'_>,
+    app_version: &str,
+) -> Result<(), PlatformError> {
+    transaction
+        .execute_batch(FINE_GRAINED_LIBRARY_SYNC_V3_SQL)
+        .map_err(|_| PlatformError::migration_failed())?;
+    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    transaction
+        .execute(
+            "INSERT INTO migration_history (version,name,applied_at,app_version) VALUES (3,'fine-grained-library-sync',?1,?2)",
+            params![now, app_version],
+        )
+        .map_err(|_| PlatformError::migration_failed())?;
+    transaction
+        .pragma_update(None, "user_version", 3)
         .map_err(|_| PlatformError::migration_failed())?;
     Ok(())
 }
@@ -352,7 +397,7 @@ mod tests {
         let paths = paths(root.path());
         let first = AndroidDatabase::open(&paths, "1.0.0-alpha.1-test").expect("open");
         let first_status = first.status().expect("status");
-        assert_eq!(first_status.schema_version, 2);
+        assert_eq!(first_status.schema_version, 4);
         assert_eq!(first_status.generation, "formal-v1");
         assert_eq!(first_status.content_id_version, 2);
         let fingerprint = first_status.device_id_fingerprint;
@@ -371,7 +416,7 @@ mod tests {
         paths.prepare().expect("prepare");
         Connection::open(paths.database_path()).expect("empty sqlite");
         let database = AndroidDatabase::open(&paths, "test").expect("open");
-        assert_eq!(database.status().expect("status").schema_version, 2);
+        assert_eq!(database.status().expect("status").schema_version, 4);
     }
 
     #[test]
@@ -397,7 +442,7 @@ mod tests {
     fn rejects_legacy_and_future_databases_without_modifying_them() {
         for (version, generation, expected) in [
             (1, Some("v0.5.5-study-baseline"), "databaseIncompatible"),
-            (3, None, "databaseTooNew"),
+            (99, None, "databaseTooNew"),
         ] {
             let root = tempfile::tempdir().expect("tempdir");
             let paths = paths(root.path());
@@ -482,7 +527,47 @@ mod tests {
     }
 
     #[test]
-    fn upgrades_v1_to_v2_and_rolls_back_a_failed_upgrade() {
+    fn matches_the_published_formal_v4_vector() {
+        let vector: serde_json::Value =
+            serde_json::from_str(include_str!("../../test-vectors/formal-v4.json")).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let database = AndroidDatabase::open(&paths(root.path()), "vector-test").unwrap();
+        assert_eq!(
+            schema_fingerprint(database.connection()).unwrap(),
+            vector["schemaFingerprint"].as_str().unwrap()
+        );
+        assert_eq!(database.status().unwrap().schema_version, 4);
+    }
+
+    #[test]
+    fn matches_the_published_formal_v3_vector() {
+        let vector: serde_json::Value =
+            serde_json::from_str(include_str!("../../test-vectors/formal-v3.json"))
+                .expect("vector");
+        let mut connection = Connection::open_in_memory().expect("open");
+        let transaction = connection.transaction().expect("transaction");
+        migrate_formal_v1(&transaction, "vector-test").expect("v1");
+        migrate_parsed_publication_storage_v2(&transaction, "vector-test").expect("v2");
+        migrate_fine_grained_library_sync_v3(&transaction, "vector-test").expect("v3");
+        transaction.commit().expect("commit");
+        let database = AndroidDatabase {
+            device_id: metadata(&connection, "device_id").expect("device"),
+            connection,
+        };
+        assert_eq!(
+            schema_fingerprint(database.connection()).expect("fingerprint"),
+            vector["schemaFingerprint"]
+                .as_str()
+                .expect("schema fingerprint")
+        );
+        assert_eq!(
+            database.status().expect("status").schema_version,
+            vector["schemaVersion"].as_i64().expect("schema version")
+        );
+    }
+
+    #[test]
+    fn upgrades_v1_to_v4_and_rolls_back_a_failed_upgrade() {
         for inject_failure in [false, true] {
             let root = tempfile::tempdir().expect("tempdir");
             let paths = paths(root.path());
@@ -497,7 +582,7 @@ mod tests {
             ).expect("fixture");
             transaction.commit().expect("commit v1");
 
-            let result = initialize(&mut connection, "v2", inject_failure);
+            let result = initialize(&mut connection, "v3", inject_failure);
             if inject_failure {
                 assert_eq!(result.expect_err("rollback").code, "migrationFailed");
                 assert_eq!(schema_version(&connection).expect("version"), 1);
@@ -514,7 +599,7 @@ mod tests {
                 assert_eq!(history, 0);
             } else {
                 result.expect("upgrade");
-                assert_eq!(schema_version(&connection).expect("version"), 2);
+                assert_eq!(schema_version(&connection).expect("version"), 4);
                 let storage: String = connection
                     .query_row("SELECT source_storage FROM publications", [], |row| {
                         row.get(0)
@@ -529,6 +614,14 @@ mod tests {
                     )
                     .expect("history");
                 assert_eq!(history, 1);
+                let library_history: i64 = connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM migration_history WHERE version=3",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .expect("library history");
+                assert_eq!(library_history, 1);
             }
         }
     }

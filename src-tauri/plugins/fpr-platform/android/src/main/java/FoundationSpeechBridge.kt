@@ -18,6 +18,10 @@ internal class FoundationSpeechBridge(private val activity: Activity) {
     @Volatile private var activePlayer: MediaPlayer? = null
     @Volatile private var activeInvoke: Invoke? = null
     @Volatile private var activeSettled: AtomicBoolean? = null
+    private var ttsEpoch = 0L
+    private var ttsReady = false
+    private var pendingSpeak: (() -> Unit)? = null
+    private var requestGeneration = 0L
     private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
         if (change == AudioManager.AUDIOFOCUS_LOSS ||
             change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ||
@@ -25,41 +29,71 @@ internal class FoundationSpeechBridge(private val activity: Activity) {
         ) stop()
     }
 
-    fun speak(invoke: Invoke, args: SystemTtsSpeakArgs) {
+    fun speak(invoke: Invoke, args: SystemTtsSpeakArgs) = activity.runOnUiThread {
         stop()
-        if (!requestFocus(args.usage)) return invoke.reject("Audio focus is unavailable", "audioFocusDenied")
+        if (!requestFocus(args.usage)) {
+            invoke.reject("Audio focus is unavailable", "audioFocusDenied")
+            return@runOnUiThread
+        }
+        val generation = ++requestGeneration
         activeInvoke = invoke
         activeSettled = AtomicBoolean(false)
-        activity.runOnUiThread {
-            try {
-                var engine: TextToSpeech? = null
-                engine = TextToSpeech(activity) { status ->
-                    val current = engine
-                    if (status != TextToSpeech.SUCCESS || current == null) {
-                        finish("System TTS is unavailable", "speechUnavailable")
-                        return@TextToSpeech
-                    }
-                    activeTts = current
-                    current.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                        override fun onStart(utteranceId: String?) = Unit
-                        override fun onDone(utteranceId: String?) = finish()
-                        override fun onError(utteranceId: String?) =
-                            finish("System TTS failed", "speechUnavailable")
-                        override fun onStop(utteranceId: String?, interrupted: Boolean) = finish()
-                    })
-                    if (current.setLanguage(Locale.forLanguageTag(args.locale)) < TextToSpeech.LANG_AVAILABLE) {
-                        finish("English system voice is unavailable", "speechUnavailable")
-                        return@TextToSpeech
-                    }
+        val utteranceId = generation.toString()
+        pendingSpeak = {
+            if (generation == requestGeneration) {
+                val current = activeTts
+                if (current == null || current.setLanguage(Locale.forLanguageTag(args.locale)) < TextToSpeech.LANG_AVAILABLE) {
+                    finish("English system voice is unavailable", "speechUnavailable")
+                } else {
                     current.setSpeechRate(args.rate)
-                    if (current.speak(args.text.trim(), TextToSpeech.QUEUE_FLUSH, null, args.requestId) == TextToSpeech.ERROR) {
+                    if (current.speak(args.text.trim(), TextToSpeech.QUEUE_FLUSH, null, utteranceId) == TextToSpeech.ERROR) {
                         finish("System TTS failed", "speechUnavailable")
                     }
                 }
-            } catch (_: Throwable) {
-                finish("System TTS is unavailable", "speechUnavailable")
             }
         }
+        try {
+            if (ttsReady) {
+                pendingSpeak?.invoke()
+                pendingSpeak = null
+            } else if (activeTts == null) {
+                val epoch = ++ttsEpoch
+                activeTts = TextToSpeech(activity.applicationContext) { status ->
+                    activity.runOnUiThread initialized@{
+                        if (epoch != ttsEpoch) return@initialized
+                        if (status != TextToSpeech.SUCCESS) {
+                            finish("System TTS is unavailable", "speechUnavailable")
+                            release()
+                        } else {
+                            ttsReady = true
+                            activeTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                                override fun onStart(utteranceId: String?) = Unit
+                                override fun onDone(utteranceId: String?) = completeUtterance(utteranceId)
+                                override fun onError(utteranceId: String?) = completeUtterance(utteranceId, "System TTS failed")
+                                override fun onStop(utteranceId: String?, interrupted: Boolean) = completeUtterance(utteranceId)
+                            })
+                            pendingSpeak?.invoke()
+                            pendingSpeak = null
+                        }
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            finish("System TTS is unavailable", "speechUnavailable")
+            release()
+        }
+    }
+
+    private fun completeUtterance(id: String?, error: String? = null) = activity.runOnUiThread {
+        if (id == requestGeneration.toString()) finish(error)
+    }
+
+    fun release() = activity.runOnUiThread {
+        ttsEpoch++
+        stop()
+        try { activeTts?.shutdown() } catch (_: Throwable) {}
+        activeTts = null
+        ttsReady = false
     }
 
     fun play(invoke: Invoke, file: File, usage: String) {
@@ -67,17 +101,19 @@ internal class FoundationSpeechBridge(private val activity: Activity) {
         if (!requestFocus(usage)) return invoke.reject("Audio focus is unavailable", "audioFocusDenied")
         activeInvoke = invoke
         activeSettled = AtomicBoolean(false)
+        val generation = ++requestGeneration
         activity.runOnUiThread {
+            if (generation != requestGeneration) return@runOnUiThread
             try {
                 val player = MediaPlayer()
                 activePlayer = player
-                player.setOnCompletionListener { finish() }
+                player.setOnCompletionListener { if (generation == requestGeneration) finish() }
                 player.setOnErrorListener { _, _, _ ->
-                    finish("Speech audio playback failed", "speechUnavailable")
+                    if (generation == requestGeneration) finish("Speech audio playback failed", "speechUnavailable")
                     true
                 }
                 player.setDataSource(file.absolutePath)
-                player.setOnPreparedListener { it.start() }
+                player.setOnPreparedListener { if (generation == requestGeneration) it.start() }
                 player.prepareAsync()
             } catch (_: Throwable) {
                 finish("Speech audio playback failed", "speechUnavailable")
@@ -105,6 +141,8 @@ internal class FoundationSpeechBridge(private val activity: Activity) {
 
     @Synchronized
     fun stop() {
+        requestGeneration++
+        pendingSpeak = null
         try { activeTts?.stop() } catch (_: Throwable) {}
         try { activePlayer?.stop() } catch (_: Throwable) {}
         finish()
@@ -130,9 +168,7 @@ internal class FoundationSpeechBridge(private val activity: Activity) {
             val pending = activeInvoke
             if (message == null) pending?.resolve() else pending?.reject(message, code ?: "speechUnavailable")
         }
-        try { activeTts?.shutdown() } catch (_: Throwable) {}
         try { activePlayer?.release() } catch (_: Throwable) {}
-        activeTts = null
         activePlayer = null
         activeInvoke = null
         activeSettled = null

@@ -1,0 +1,21 @@
+{
+  "version": 4,
+  "publicationId": "pub_6717464f151718094a4a1266",
+  "articleId": "18bde25ed12368df761079722579",
+  "blockId": "5d8d073400c9f9093a1b3fff2e0a",
+  "sourceHash": "e950a24fe3ba856138c39d95ff285d87acd772f92250d51f1609a48c03f1da9c",
+  "translation": "共享译文 🌊",
+  "model": "vector-model",
+  "promptVersion": "vector-prompt",
+  "versionId": "cdbe2f54330da945c7f50be84e8a49fdbf5c4342b4da5f0fcd3b954410fb6242",
+  "record": {
+    "recordId": "translation:cdbe2f54330da945c7f50be84e8a49fdbf5c4342b4da5f0fcd3b954410fb6242:5d8d073400c9f9093a1b3fff2e0a",
+    "publicationId": "pub_6717464f151718094a4a1266",
+    "articleId": "18bde25ed12368df761079722579",
+    "kind": "translation",
+    "payload": "{\"blockId\":\"5d8d073400c9f9093a1b3fff2e0a\",\"model\":\"vector-model\",\"promptVersion\":\"vector-prompt\",\"sourceHash\":\"e950a24fe3ba856138c39d95ff285d87acd772f92250d51f1609a48c03f1da9c\",\"text\":\"共享译文 🌊\",\"versionId\":\"cdbe2f54330da945c7f50be84e8a49fdbf5c4342b4da5f0fcd3b954410fb6242\"}",
+    "updatedAt": "2026-09-06T00:00:00.000Z",
+    "deviceId": "vector-device"
+  },
+  "publicationContentHash": "198af720c5a76ec0b263e527257cd3cd65640391e5dd1522fab8008015f9c77b"
+}

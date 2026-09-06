@@ -6,7 +6,7 @@
 
 外刊阅读器是一款面向 Windows 和 Android 的 EPUB 阅读与英语学习应用。两端共用纯 TypeScript 核心，数据默认只保存在本机，也可以在同一局域网内手动同步。
 
-当前版本：`1.0.0`
+已发布版本：`1.0.0`。当前源码另含尚未发布的阅读记录、译文版本、恢复和后台朗读改进，详见 [CHANGELOG](CHANGELOG.md)。
 
 ## 主要功能
 
@@ -15,7 +15,9 @@
 - 提供 ECDICT 本地词典、在线补充释义、查词、生词、语境收藏和词集筛选。
 - 使用 FSRS-6 进行每日复习、长期计划、学习记录和进度管理。
 - Windows 与 Android 可在局域网内配对，预览差异并手动同步书库与学习数据。
-- 支持 `.fprbackup` 便携备份；原始 EPUB、词典、缓存、密钥和设备身份不会进入备份或同步载荷。
+- 支持 `.fprbackup` 便携备份；原始 EPUB、词典、缓存、密钥和设备身份不会进入备份或同步载荷。未发布源码支持保留译文版本，这些版本作为用户数据进入备份和同步。
+
+源码中的新增功能：按文章恢复进度、书签/已读筛选与全库正文搜索；同一原始 EPUB 再次导入可补回旧解析遗漏；Android 文章朗读支持切后台、锁屏和通知控制。两端升级后才能使用新版局域网同步。
 
 ## 下载与安装
 
@@ -61,12 +63,15 @@ pnpm tauri:android:build
 
 Windows 使用 Electron，Android 使用 Tauri 2；`src/core` 保持纯 TypeScript，renderer 只通过统一 `AppClient` 访问平台能力。仓库结构与维护边界见 [AGENTS.md](AGENTS.md) 和 [多平台仓库规划](docs/repository-architecture.md)。
 
+`pnpm dev` 会自动构建并监听主进程；日常逻辑验证可用 `pnpm test:unit`，发布前运行完整 `pnpm test`。未发布的修复及范围见 [项目修复记录](docs/project-repair-2026-09.md)。
+
 ## 文档
 
 - [更新记录](CHANGELOG.md)
 - [人工发布验证清单](docs/release-validation-checklist.md)
 - [Android 移植路线与验证记录](docs/tauri-android-port-roadmap.md)
 - [局域网同步设计](docs/future-sync-roadmap.md)
+- [局域网同步审计与人工验证清单](docs/sync-validation.md)
 
 ## 许可
 

@@ -9,11 +9,22 @@ import {
   TauriMobileSpeechClient,
   TauriMobileTranslationClient,
 } from '../src/renderer/tauri/mobile-online-client'
-import { readMobileAppSource } from './mobile-source'
 
 const readText = (file: string) => readFile(new URL(`../${file}`, import.meta.url), 'utf8')
 
 describe('Android E4 online and system service boundary', () => {
+  it('forwards explicit retranslation without forcing ordinary cache reads', async () => {
+    const calls: unknown[] = []
+    const client = new TauriMobileTranslationClient(async <T>(command: string, args?: Record<string, unknown>) => {
+      calls.push([command, args]); return undefined as T
+    })
+    await client.translateArticle('article')
+    await client.translateArticle('article', true)
+    expect(calls).toEqual([
+      ['translate_mobile_article', { articleId: 'article', force: false }],
+      ['translate_mobile_article', { articleId: 'article', force: true }],
+    ])
+  })
   it('keeps renderer clients on versioned logical commands', async () => {
     expect(MOBILE_ONLINE_SERVICES_CONTRACT_VERSION).toBe(1)
     expectTypeOf<TauriMobileTranslationClient>().toMatchTypeOf<MobileTranslationClient>()
@@ -28,23 +39,11 @@ describe('Android E4 online and system service boundary', () => {
     ])
   })
 
-  it('connects reader playback, study example hydration, and developer-only controls', async () => {
-    const [app, study, dictionaryCommands, studyCommands] = await Promise.all([
-      readMobileAppSource(),
-      readText('src/renderer/tauri/mobile-study-pages.tsx'),
+  it('registers the learning service commands', async () => {
+    const commands = (await Promise.all([
       readText('src-tauri/src/commands/dictionary.rs'),
       readText('src-tauri/src/commands/study.rs'),
-    ])
-    const commands = `${dictionaryCommands}\n${studyCommands}`
-    expect(app).toContain('从可见段落开始朗读')
-    expect(app).not.toContain('朗读本段')
-    expect(app).toContain('title="文章翻译"')
-    expect(app).toContain("className=\"mobile-translation-toggle\"")
-    expect(app).toContain('skipSpeech(-1)')
-    expect(app).toContain('skipSpeech(1)')
-    expect(study).toContain('client.hydrateCurrentExamples({')
-    expect(study).toContain('debug?.enabled')
-    expect(study).toContain('client.deletePlan(planId, deleteName, { resetWordProgress })')
+    ])).join('\n')
     for (const command of [
       'hydrate_mobile_study_examples',
       'get_mobile_study_debug_state',

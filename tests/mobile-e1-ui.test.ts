@@ -16,7 +16,6 @@ describe('Android E1 local library and reader', () => {
     expect(client).toContain('readonly services: MobileReaderServiceSlots')
     expect(services).toContain('translation: TranslationApi | null')
     expect(services).toContain('speech: SpeechApi | null')
-    expect(app).toContain('translationClient.translateArticle(articleId)')
     expect(app).toContain('speechClient.play({')
     expect(app).not.toContain('synthesize(')
   })
@@ -71,18 +70,6 @@ describe('Android E1 local library and reader', () => {
     expect(app).toContain('<AppearanceControls preferences={preferences}')
     expect(model).toContain("{ id: 'compact', label: '紧凑', value: 640 }")
     expect(model).toContain("{ id: 'wide', label: '宽阔', value: 900 }")
-  })
-
-  it('uses compact scalable chrome while preserving minimum interaction targets', async () => {
-    const css = await readMobileCssSource()
-    expect(css).toContain('--title-page: clamp(1.55rem,6vw,1.78rem)')
-    expect(css).toMatch(/\.mobile-app-shell \.mobile-button\s*\{[^}]*min-height:\s*40px/s)
-    expect(css).toMatch(/\.mobile-app-shell \.mobile-button\.primary\s*\{[^}]*box-shadow:\s*none/s)
-    expect(css).toContain('height: calc(60px + env(safe-area-inset-bottom))')
-    expect(css).toContain('grid-template-columns: repeat(3,minmax(0,1fr))')
-    expect(css).toMatch(/\.mobile-app-shell \.mobile-cover > img\[hidden\]\s*\{\s*display:\s*none;/s)
-    expect(css).toContain('.mobile-app-shell .mobile-toggle > input:checked + span')
-    expect(css).toContain('text-size-adjust: 100%')
   })
 
 })

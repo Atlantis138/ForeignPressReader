@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { LogicalRecordV1, SyncBatchV2 } from '../src/core/sync-model'
+import type { LogicalRecordV1, SyncBatchV4 } from '../src/core/sync-model'
 import {
   createLanSyncBatchHeaderV2,
   deriveLanSyncPairingCode,
@@ -37,13 +37,13 @@ interface WireVector {
   expectedPairingDigestSha256: string
   expectedPairingCode: string
   expectedTrustToken: string
-  batch: SyncBatchV2
+  batch: SyncBatchV4
   expectedBatchNdjsonBytes: number
   expectedBatchNdjsonSha256: string
 }
 
 const vector = JSON.parse(fs.readFileSync(
-  path.join(process.cwd(), 'test-vectors', 'lan-sync-wire-v2.json'),
+  path.join(process.cwd(), 'test-vectors', 'lan-sync-wire-v2-model-v4.json'),
   'utf8',
 )) as WireVector
 
@@ -123,7 +123,7 @@ describe('LAN sync wire v2 cross-platform vector', () => {
         deviceId: vector.left.deviceId,
       },
     }))
-    const batch: SyncBatchV2 = {
+    const batch: SyncBatchV4 = {
       ...vector.batch,
       batchId: '55555555-5555-4555-8555-555555555555',
       senderRevision: records.length,

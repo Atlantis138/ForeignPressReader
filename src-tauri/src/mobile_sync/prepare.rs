@@ -12,14 +12,18 @@ pub fn create_peer_summary(
         return Err(sync_invalid("同步摘要请求无效。"));
     }
     let peer = peer_state(database.connection(), sender_device_id)?;
-    let mut hashes = database
+    let ids = database
         .connection()
-        .prepare("SELECT hash FROM publications ORDER BY hash")
+        .prepare("SELECT id FROM publications ORDER BY id")
         .map_err(|_| PlatformError::database_corrupt())?
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([], |r| r.get::<_, String>(0))
         .map_err(|_| PlatformError::database_corrupt())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| PlatformError::database_corrupt())?;
+    let mut hashes = ids
+        .iter()
+        .map(|id| crate::publication_repair::content_hash(database, id))
+        .collect::<Result<Vec<_>, _>>()?;
     hashes.sort();
     hashes.dedup();
     Ok(SyncPeerSummary {
@@ -81,7 +85,8 @@ pub fn preview_incoming_batch(
     batch: &SyncBatch,
 ) -> Result<IncomingSyncPreviewPlan, PlatformError> {
     validate_batch(batch, database.device_id())?;
-    let current = export_logical_records(database.connection(), &HashMap::new())?
+    let refs = batch.records.iter().map(record_ref).collect::<Vec<_>>();
+    let current = export_logical_records(database.connection(), &HashMap::new(), Some(&refs))?
         .into_iter()
         .map(|record| (identity(&record.entity_type, &record.key), record))
         .collect::<HashMap<_, _>>();
@@ -120,9 +125,6 @@ pub fn preview_incoming_batch(
     let mut missing_blob_hashes = Vec::new();
     let mut total_bytes = 0_u64;
     for blob in &batch.blobs {
-        if mobile_reading::find_publication_by_hash(database, &blob.content_sha256)?.is_some() {
-            continue;
-        }
         total_bytes = total_bytes
             .checked_add(blob.byte_length)
             .ok_or_else(|| sync_invalid("同步刊物包总大小无效。"))?;
@@ -159,31 +161,39 @@ pub fn prepare_transfer(
         .iter()
         .map(|item| (identity(&item.entity_type, &item.key), item.revision))
         .collect::<HashMap<_, _>>();
-    let mut records = export_logical_records(database.connection(), &revisions_by_identity)?;
     let peer = peer_state(database.connection(), peer_device_id)?;
     let current_revision = current_revision(database.connection())?;
-    let selected = if peer.is_none() {
-        records.iter().map(record_ref).collect::<Vec<_>>()
+    let mut selected = if peer.is_none() {
+        revisions.clone()
     } else {
-        let mut requested = HashSet::new();
-        for item in &revisions {
-            if item.revision > summary.last_applied_sender_revision {
-                requested.insert(identity(&item.entity_type, &item.key));
-            }
-        }
-        for item in &summary.changed_entities {
-            requested.insert(identity(&item.entity_type, &item.key));
-        }
-        records
+        let mut refs = revisions
             .iter()
-            .filter(|record| requested.contains(&identity(&record.entity_type, &record.key)))
-            .map(record_ref)
-            .collect::<Vec<_>>()
+            .filter(|item| item.revision > summary.last_applied_sender_revision)
+            .cloned()
+            .collect::<Vec<_>>();
+        refs.extend(summary.changed_entities.iter().cloned());
+        refs
     };
-    let selected_identities = selected
+    let positions = selected
+        .iter()
+        .filter(|item| item.entity_type == "publication-lifecycle")
+        .map(|item| SyncEntityRef {
+            entity_type: "reading-position".into(),
+            key: item.key.clone(),
+            revision: 0,
+        })
+        .collect::<Vec<_>>();
+    selected.extend(positions);
+    let mut records = export_logical_records(
+        database.connection(),
+        &revisions_by_identity,
+        Some(&selected),
+    )?;
+    let mut selected_identities = selected
         .iter()
         .map(|item| identity(&item.entity_type, &item.key))
         .collect::<HashSet<_>>();
+    expand_selected_dependencies(&records, &mut selected_identities);
     records
         .retain(|record| selected_identities.contains(&identity(&record.entity_type, &record.key)));
     records.sort_by(compare_records);
@@ -206,7 +216,10 @@ pub fn prepare_transfer(
                 continue;
             }
             let content_hash = required_string(&record.value, "contentHash")?;
-            if available.contains(content_hash) {
+            if available.contains(&crate::publication_repair::content_hash(
+                database,
+                required_string(&record.value, "publicationId")?,
+            )?) {
                 continue;
             }
             let publication_id = required_string(&record.value, "publicationId")?;
@@ -278,6 +291,28 @@ pub fn prepare_transfer(
     result
 }
 
+pub(super) fn expand_selected_dependencies(
+    records: &[LogicalRecord],
+    selected_identities: &mut HashSet<String>,
+) {
+    let present_publications = records
+        .iter()
+        .filter(|record| {
+            record.entity_type == "publication-lifecycle"
+                && record.value.get("state").and_then(Value::as_str) == Some("present")
+                && selected_identities.contains(&identity(&record.entity_type, &record.key))
+        })
+        .map(|record| record.key.as_str())
+        .collect::<HashSet<_>>();
+    for record in records {
+        if record.entity_type == "reading-position"
+            && present_publications.contains(record.key.as_str())
+        {
+            selected_identities.insert(identity(&record.entity_type, &record.key));
+        }
+    }
+}
+
 pub fn cleanup_prepared(transfer: &PreparedMobileTransfer) {
     let _ = fs::remove_dir_all(&transfer.root);
 }
@@ -302,4 +337,100 @@ pub fn expanded_blob_bytes(blob_paths: &HashMap<String, PathBuf>) -> Result<u64,
         }
     }
     Ok(total)
+}
+
+pub fn preview_record_page(
+    connection: &Connection,
+    records: &[LogicalRecord],
+    total: usize,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, PlatformError> {
+    let refs = records.iter().map(record_ref).collect::<Vec<_>>();
+    let current = export_logical_records(connection, &HashMap::new(), Some(&refs))?
+        .into_iter()
+        .map(|r| (identity(&r.entity_type, &r.key), r))
+        .collect::<HashMap<_, _>>();
+    let items = records.iter().map(|r| {
+        let existing = current.get(&identity(&r.entity_type, &r.key));
+        let action = if existing.is_some_and(|e| e.value == r.value) { "unchanged" } else if r.entity_type == "publication-lifecycle" && r.value["state"] == "deleted" { "delete" } else if existing.is_some() { "update" } else { "new" };
+        let label = r.value.get("articleId").and_then(Value::as_str).map(|id| connection.query_row("SELECT title FROM articles WHERE id=?1",[id],|row| row.get::<_,String>(0)).unwrap_or_else(|_| "待恢复的文章".into()).chars().take(160).collect::<String>());
+        serde_json::json!({"type":r.entity_type,"key":r.key,"label":label,"action":action,"before":existing.map(describe_sync_value),"after":describe_sync_value(r)})
+    }).collect::<Vec<_>>();
+    Ok(serde_json::json!({"total":total,"offset":offset,"limit":limit,"items":items}))
+}
+fn describe_sync_value(record: &LogicalRecord) -> String {
+    if record.entity_type == "reader-record" {
+        let payload: Value =
+            serde_json::from_str(record.value["payload"].as_str().unwrap_or("null"))
+                .unwrap_or(Value::Null);
+        let summary = match record.value["kind"].as_str() {
+            Some("bookmark") => if payload == true {
+                "已加书签"
+            } else {
+                "未加书签"
+            }
+            .to_owned(),
+            Some("read") => if payload == true { "已读" } else { "未读" }.to_owned(),
+            Some("translation-selection") => if payload.is_null() {
+                "查看当前缓存译文"
+            } else {
+                "查看保留的译文版本"
+            }
+            .to_owned(),
+            Some("translation") => format!(
+                "保留译文 · {}：{}",
+                payload["model"].as_str().unwrap_or(""),
+                payload["text"].as_str().unwrap_or("")
+            )
+            .chars()
+            .take(400)
+            .collect(),
+            _ => "已保存文章阅读位置".into(),
+        };
+        return format!(
+            "{} · 修改时间：{}",
+            summary,
+            record.value["updatedAt"].as_str().unwrap_or("")
+        );
+    }
+    let names = [
+        ("title", "标题"),
+        ("name", "名称"),
+        ("lemma", "单词"),
+        ("state", "状态"),
+        ("kind", "类型"),
+        ("payload", "内容"),
+        ("value", "设置值"),
+        ("sourceText", "原文"),
+        ("text", "内容"),
+        ("translation", "译文"),
+        ("due", "到期"),
+        ("updatedAt", "修改时间"),
+        ("changedAt", "修改时间"),
+        ("articleId", "文章"),
+        ("rating", "评分"),
+    ];
+    let parts = names
+        .iter()
+        .filter_map(|(key, name)| {
+            record.value.get(key).map(|v| {
+                format!(
+                    "{}：{}",
+                    name,
+                    v.as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| v.to_string())
+                        .chars()
+                        .take(160)
+                        .collect::<String>()
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        format!("记录 {}", record.key.chars().take(100).collect::<String>())
+    } else {
+        parts.join(" · ").chars().take(500).collect()
+    }
 }

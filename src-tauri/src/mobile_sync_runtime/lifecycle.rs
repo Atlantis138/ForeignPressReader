@@ -562,3 +562,43 @@ impl MobileSyncRuntime {
         Ok(())
     }
 }
+
+pub fn incoming_changes(
+    state: &PlatformState,
+    transfer_id: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, PlatformError> {
+    if !(1..=50).contains(&limit) {
+        return Err(sync_invalid("同步预览分页无效。"));
+    }
+    let (records, total) = {
+        let runtime = state.sync_runtime().lock()?;
+        let transfer = runtime
+            .incoming
+            .get(transfer_id)
+            .filter(|t| t.status == "waiting" && t.preview.is_some())
+            .ok_or_else(|| sync_invalid("同步请求已经处理或尚未验证完成。"))?;
+        let batch = transfer
+            .batch
+            .as_ref()
+            .ok_or_else(|| sync_invalid("同步批次尚未验证完成。"))?;
+        (
+            batch
+                .records
+                .iter()
+                .skip(offset)
+                .take(limit)
+                .cloned()
+                .collect::<Vec<_>>(),
+            batch.records.len(),
+        )
+    };
+    mobile_sync::preview_record_page(
+        state.database()?.connection(),
+        &records,
+        total,
+        offset,
+        limit,
+    )
+}

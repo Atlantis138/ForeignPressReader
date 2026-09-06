@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from 'vitest'
 import { MobileRequestCache } from '../src/renderer/tauri/mobile-request-cache'
 
 describe('MobileRequestCache', () => {
+  it.each(['invalidate', 'clear'] as const)('discards in-flight responses after %s', async action => {
+    const cache = new MobileRequestCache<number>()
+    let finish!: (value: number) => void
+    const old = cache.get(() => new Promise<number>(resolve => { finish = resolve }))
+    cache[action]()
+    await expect(cache.get(async () => 2)).resolves.toBe(2)
+    finish(1)
+    await old
+    expect(cache.peek()).toBe(2)
+    await expect(cache.get(async () => 3)).resolves.toBe(2)
+  })
   it('deduplicates concurrent loads and reuses a fresh value', async () => {
     let resolveLoad!: (value: number) => void
     const load = vi.fn(() => new Promise<number>((resolve) => { resolveLoad = resolve }))

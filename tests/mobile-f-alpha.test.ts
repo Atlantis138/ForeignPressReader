@@ -66,10 +66,10 @@ describe('Android stage F Alpha boundary', () => {
     expect(shell).toContain("'fpr.android.shell.v1'")
     expect(shell).toContain("route.section === 'developer'")
     expect(entry).not.toMatch(/(?:prototype|fixture|diagnostics|d0)/i)
-    expect(JSON.parse(packageJson).version).toBe('1.0.0')
+    expect(JSON.parse(packageJson).version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)
   })
 
-  it('retains immutable formal data contract versions and rejects Demo backup manifests', async () => {
+  it('retains immutable baselines alongside the current versioned contracts and rejects Demo backups', async () => {
     const [database, portable, desktopPortable, sync, contentIds] = await Promise.all([
       readText('src-tauri/src/database.rs'),
       readText('src-tauri/src/mobile_portable.rs'),
@@ -78,9 +78,13 @@ describe('Android stage F Alpha boundary', () => {
       readText('src/core/epub-importer.ts'),
     ])
     expect(database).toContain('formal-v1')
-    expect(portable).toContain('FORMAT_VERSION: i64 = 2')
+    expect(database).toContain('LATEST_SCHEMA_VERSION: i64 = 4')
+    expect(portable).toContain('FORMAT_VERSION: i64 = 4')
+    expect(desktopPortable).toContain('const FORMAT_VERSION = 4')
     expect(portable).toContain('rejects_demo_and_future_manifests')
-    expect(sync).toContain('SYNC_MODEL_VERSION = 1 as const')
+    expect(sync).toContain('LEGACY_SYNC_MODEL_VERSION = 1 as const')
+    expect(sync).toContain('PREVIOUS_SYNC_MODEL_VERSION = 2 as const')
+    expect(sync).toContain('SYNC_MODEL_VERSION = 4 as const')
     expect(contentIds).toContain('CONTENT_ID_VERSION = 2')
     const paths = [
       'publication-lifecycle', 'settings', 'reading-positions', 'user-lexemes', 'lexeme-examples',

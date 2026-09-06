@@ -4,14 +4,17 @@ import path from 'node:path'
 import JSZip from 'jszip'
 import { afterEach, describe, expect, it } from 'vitest'
 import { PublicationFormatRegistry } from '../src/core/importing/publication-formats'
-import type { SyncBatchV2 } from '../src/core/sync-model'
+import type { PortableUserData } from '../src/core/portable-data'
+import type { SyncBatchV2, SyncBatchV3 } from '../src/core/sync-model'
 import { SqliteApplicationRepository } from '../src/main/database'
 import { EpubImporter } from '../src/main/epub-importer'
 import { LibraryService } from '../src/main/library-service'
+import { SqliteStudyRepository } from '../src/main/study-repository'
 import {
   SyncDataService,
   portableDataToLogicalRecords,
   stablePayloadSha256,
+  validateBatchEnvelope,
 } from '../src/main/sync-data-service'
 
 interface TestDevice {
@@ -39,7 +42,62 @@ describe('main-process loopback sync adapter', () => {
 
     expect(vector.batch.modelVersion).toBe(2)
     expect(vector.batch.blobs[0].kind).toBe('publication-package')
+    expect(() => validateBatchEnvelope(vector.batch, vector.batch.recipientDeviceId)).not.toThrow()
     expect(stablePayloadSha256(vector.batch)).toBe(vector.expectedStablePayloadSha256)
+  })
+
+  it('matches and validates the shared fine-grained-library Sync Model v3 vector', () => {
+    const vector = JSON.parse(fs.readFileSync(
+      path.join(process.cwd(), 'test-vectors', 'sync-model-v3.json'),
+      'utf8',
+    )) as { expectedStablePayloadSha256: string; batch: SyncBatchV3 }
+    expect(() => validateBatchEnvelope(vector.batch, vector.batch.recipientDeviceId)).not.toThrow()
+    expect(stablePayloadSha256(vector.batch)).toBe(vector.expectedStablePayloadSha256)
+  })
+
+  it('rejects malformed batch identities, revision ranges and package descriptors', () => {
+    const vector = JSON.parse(fs.readFileSync(
+      path.join(process.cwd(), 'test-vectors', 'sync-model-v2.json'),
+      'utf8',
+    )) as { batch: SyncBatchV2 }
+    const recipient = vector.batch.recipientDeviceId
+    const validBatch = {
+      ...vector.batch,
+      batchId: '22222222-2222-4222-8222-222222222222',
+    }
+
+    expect(() => validateBatchEnvelope({ ...validBatch, batchId: '../invalid' }, recipient))
+      .toThrow('标识')
+    expect(() => validateBatchEnvelope({
+      ...validBatch,
+      mode: 'incremental',
+      fromSenderRevisionExclusive: null,
+      inspectedPeerRevision: null,
+    }, recipient)).toThrow('revision 范围')
+    expect(() => validateBatchEnvelope({
+      ...validBatch,
+      records: validBatch.records.map((record, index) => index === 0
+        ? { ...record, revision: validBatch.senderRevision + 1 }
+        : record),
+    }, recipient)).toThrow('逻辑记录')
+    expect(() => validateBatchEnvelope({
+      ...validBatch,
+      blobs: validBatch.blobs.map((blob) => ({
+        ...blob,
+        mediaType: 'application/zip',
+      })) as SyncBatchV2['blobs'],
+    }, recipient)).toThrow('媒体类型')
+    expect(() => validateBatchEnvelope({
+      ...validBatch,
+      blobs: validBatch.blobs.map((blob) => ({ ...blob, formatId: '../epub' })) as SyncBatchV2['blobs'],
+    }, recipient)).toThrow('大对象描述')
+
+    const unsafePublication = structuredClone(validBatch)
+    const lifecycle = unsafePublication.records.find((record) => record.type === 'publication-lifecycle')
+    if (!lifecycle || lifecycle.type !== 'publication-lifecycle') throw new Error('lifecycle fixture missing')
+    lifecycle.key = '..\\..\\outside'
+    lifecycle.value.publicationId = '..\\..\\outside'
+    expect(() => validateBatchEnvelope(unsafePublication, recipient)).toThrow('刊物生命周期')
   })
 
   it('previews only changes and publication packages that the receiver still lacks', async () => {
@@ -59,7 +117,8 @@ describe('main-process loopback sync adapter', () => {
       totalBytes: transfer.batch.blobs[0].byteLength,
     })
     await target.sync.applyPreparedTransfer(transfer)
-    expect(target.sync.previewIncomingBatch(transfer.batch)).toMatchObject({
+    await source.sync.cleanupPreparedTransfer(transfer)
+    expect(target.sync.previewIncomingBatch((await source.sync.prepareSyncTo(target.sync)).batch)).toMatchObject({
       newPublications: 0,
       updatedRecords: 0,
       deletedPublications: 0,
@@ -114,6 +173,7 @@ describe('main-process loopback sync adapter', () => {
     const positionOnly = await source.sync.syncTo(target.sync)
     expect(positionOnly.batch.records.map((record) => `${record.type}:${record.key}`)).toEqual([
       `reading-position:${imported.publication.id}`,
+      `reader-record:position:${articleId}`,
     ])
     expect(target.database.getArticle(articleId).savedPosition).toEqual({
       scrollTop: 321, anchorBlockId: blockId, anchorTokenIndex: 4, anchorFraction: 0.35,
@@ -158,6 +218,16 @@ describe('main-process loopback sync adapter', () => {
         google: { modelId: 'standard', voiceId: 'en-GB-Standard-A' },
         minimax: { modelId: 'speech-2.8-turbo', voiceId: 'English_expressive_narrator' },
       },
+    })
+
+    await target.library.removeImportedPublication(imported.publication.id)
+    const restored = await source.sync.syncTo(target.sync)
+    expect(restored.batch.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'publication-lifecycle', key: imported.publication.id }),
+      expect.objectContaining({ type: 'reading-position', key: imported.publication.id }),
+    ]))
+    expect(target.database.getArticle(articleId).savedPosition).toEqual({
+      scrollTop: 321, anchorBlockId: blockId, anchorTokenIndex: 4, anchorFraction: 0.35,
     })
 
     await source.library.removeImportedPublication(imported.publication.id)
@@ -267,6 +337,48 @@ describe('main-process loopback sync adapter', () => {
     expect(fs.existsSync(expiring.transferRoot!)).toBe(false)
   })
 
+  it('round-trips every non-publication Sync Model v3 record family', async () => {
+    const source = await createDevice('all-records-source')
+    const target = await createDevice('all-records-target')
+    const vector = JSON.parse(fs.readFileSync(
+      path.join(process.cwd(), 'test-vectors', 'portable-v2-interop.json'),
+      'utf8',
+    )) as { portableData: PortableUserData }
+    source.database.mergePortableUserData(vector.portableData)
+
+    const sourceRecords = portableDataToLogicalRecords(
+      source.database.exportPortableUserData(),
+      () => 0,
+    )
+    const transfer = await source.sync.syncTo(target.sync)
+    const targetRecords = portableDataToLogicalRecords(
+      target.database.exportPortableUserData(),
+      () => 0,
+    )
+
+    expect(new Set(transfer.batch.records.map((record) => record.type))).toEqual(
+      new Set(sourceRecords.map((record) => record.type)),
+    )
+    expect(targetRecords).toEqual(sourceRecords)
+    expect(sourceRecords.map((record) => record.type)).toEqual(expect.arrayContaining([
+      'setting',
+      'user-lexeme',
+      'lexeme-example',
+      'vocabulary-source',
+      'saved-context',
+      'study-plan',
+      'study-plan-source',
+      'study-plan-origin',
+      'study-plan-exclusion',
+      'scheduler-profile',
+      'review-card',
+      'review-event',
+      'reinforcement-event',
+      'study-progress-state',
+      'study-lexeme-reset',
+    ]))
+  })
+
   it('propagates received logical changes through a third device without SQL-shaped study fields', async () => {
     const first = await createDevice('chain-a')
     const second = await createDevice('chain-b')
@@ -302,6 +414,161 @@ describe('main-process loopback sync adapter', () => {
       expect.objectContaining({ planId: 'plan-sync', name: 'Sync plan' }),
     ]))
   })
+
+  it('retires receiver-local queue items when a synchronized plan is deleted', async () => {
+    const source = await createDevice('plan-delete-source')
+    const target = await createDevice('plan-delete-target')
+    let sourceNow = new Date('2026-07-31T08:00:00.000Z')
+    const sourceStudy = new SqliteStudyRepository(source.database, () => sourceNow)
+    const planId = sourceStudy.createPlan(studyPlan('Delete through sync'))
+    sourceStudy.applySourceSnapshot(
+      String(sourceStudy.activeSources(planId)[0].source_id),
+      [studyWord('stale-queue')],
+      'reader:1',
+    )
+    await source.sync.syncTo(target.sync)
+
+    const targetStudy = new SqliteStudyRepository(
+      target.database,
+      () => new Date('2026-07-31T09:00:00.000Z'),
+    )
+    const session = targetStudy.openToday()
+    expect(target.database.getConnection().prepare('SELECT plan_id FROM study_session_items WHERE item_id=?')
+      .get(session.current!.itemId)).toMatchObject({ plan_id: planId })
+    expect(countRows(target, "study_session_items WHERE status IN ('pending','revealed')")).toBe(1)
+
+    sourceNow = new Date('2026-07-31T10:00:00.000Z')
+    sourceStudy.setDeveloperMode(true)
+    sourceStudy.deletePlan(planId, 'Delete through sync', { resetWordProgress: false })
+    const deletion = await source.sync.syncTo(target.sync)
+
+    expect(deletion.batch.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'study-plan',
+        value: expect.objectContaining({ planId, deletedAt: sourceNow.toISOString() }),
+      }),
+    ]))
+    expect(targetStudy.listPlans(true)).toEqual([])
+    expect(countRows(target, "study_session_items WHERE status IN ('pending','revealed')")).toBe(0)
+    expect(target.database.getConnection().prepare('SELECT status FROM study_sessions WHERE session_id=?')
+      .get(session.sessionId)).toMatchObject({ status: 'completed' })
+  })
+
+  it('applies a global progress reset to receiver-local cards and activity sessions', async () => {
+    const source = await createDevice('global-reset-source')
+    const target = await createDevice('global-reset-target')
+    let sourceNow = new Date('2026-07-31T08:00:00.000Z')
+    const sourceStudy = new SqliteStudyRepository(source.database, () => sourceNow)
+    const planId = sourceStudy.createPlan(studyPlan('Reset through sync'))
+    sourceStudy.applySourceSnapshot(
+      String(sourceStudy.activeSources(planId)[0].source_id),
+      [studyWord('reset-queue')],
+      'reader:1',
+    )
+    await source.sync.syncTo(target.sync)
+
+    const targetStudy = new SqliteStudyRepository(
+      target.database,
+      () => new Date('2026-07-31T09:00:00.000Z'),
+    )
+    let session = targetStudy.openToday()
+    session = targetStudy.stageAnswer({
+      sessionId: session.sessionId,
+      itemId: session.current!.itemId,
+      expectedVersion: session.current!.version,
+      answer: 'known',
+    })
+    targetStudy.commitAnswer({
+      sessionId: session.sessionId,
+      itemId: session.current!.itemId,
+      expectedVersion: session.current!.version,
+      commandId: crypto.randomUUID(),
+      answer: 'known',
+    })
+    expect(countRows(target, 'review_cards')).toBe(1)
+    expect(countRows(target, 'study_sessions')).toBe(1)
+
+    sourceNow = new Date('2026-07-31T10:00:00.000Z')
+    sourceStudy.setDeveloperMode(true)
+    sourceStudy.resetAllProgress('RESET_ALL_STUDY_PROGRESS')
+    const reset = await source.sync.syncTo(target.sync)
+
+    expect(reset.batch.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'study-progress-state' }),
+    ]))
+    expect(countRows(target, 'review_cards')).toBe(0)
+    expect(countRows(target, 'review_events')).toBe(0)
+    expect(countRows(target, 'study_sessions')).toBe(0)
+  })
+
+  it('merges receiver-only library categories and propagates category tombstones without losing local titles', async () => {
+    const source = await createDevice('library-source')
+    const target = await createDevice('library-target')
+    const duplicateName = '分类'.repeat(50)
+    const sourceCategory = source.database.createLibraryCategory(duplicateName).categories[0]
+    const targetCategory = target.database.createLibraryCategory(duplicateName).categories[0]
+    const targetEpub = path.join(target.root, 'receiver-only.epub')
+    fs.writeFileSync(targetEpub, await syntheticEpub())
+    const receiverPublication = await target.library.importFile(targetEpub)
+
+    const initialLibrarySync = await source.sync.syncTo(target.sync)
+    expect(initialLibrarySync.batch.records).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'setting', key: 'library.management' }),
+    ]))
+    expect(target.database.getLibraryState().categories.map((category) => category.id).sort()).toEqual(
+      [sourceCategory.id, targetCategory.id].sort(),
+    )
+    const mergedNames = target.database.getLibraryState().categories.map((category) => category.name)
+    expect(new Set(mergedNames).size).toBe(2)
+    expect(mergedNames.every((name) => Array.from(name).length <= 100)).toBe(true)
+
+    target.database.renameLibraryPublication(receiverPublication.publication.id, 'Receiver title')
+    target.database.assignLibraryPublications([receiverPublication.publication.id], sourceCategory.id)
+    target.database.getConnection().prepare('UPDATE settings SET updated_at=? WHERE key=?').run(
+      '2099-01-01T00:00:00.000Z',
+      `library.item.${receiverPublication.publication.id}`,
+    )
+    source.database.deleteLibraryCategory(sourceCategory.id)
+    const deletion = await source.sync.syncTo(target.sync)
+
+    expect(deletion.batch.modelVersion).toBe(4)
+    expect(deletion.batch.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'setting',
+        key: `library.category.${sourceCategory.id}`,
+        value: expect.objectContaining({
+          value: expect.objectContaining({ state: 'deleted' }),
+        }),
+      }),
+    ]))
+    const state = target.database.getLibraryState()
+    expect(state.categories.map((category) => category.id)).toEqual([targetCategory.id])
+    expect(state.publications).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: receiverPublication.publication.id,
+        title: 'Receiver title',
+        categoryId: null,
+      }),
+    ]))
+    const item = target.database.getConnection().prepare('SELECT value,updated_at FROM settings WHERE key=?')
+      .get(`library.item.${receiverPublication.publication.id}`) as { value: string; updated_at: string }
+    expect(JSON.parse(item.value)).toMatchObject({
+      publicationId: receiverPublication.publication.id,
+      customTitle: 'Receiver title',
+      categoryId: null,
+      state: 'present',
+    })
+    expect(item.updated_at > '2099-01-01T00:00:00.000Z').toBe(true)
+
+    await target.sync.syncTo(source.sync)
+    expect(source.database.getLibraryState().publications).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: receiverPublication.publication.id,
+        title: 'Receiver title',
+        categoryId: null,
+      }),
+    ]))
+  })
 })
 
 async function createDevice(label: string): Promise<TestDevice> {
@@ -329,6 +596,31 @@ function setPublicationImportTime(device: TestDevice, publicationId: string, imp
   database.prepare('UPDATE publications SET imported_at=? WHERE id=?').run(importedAt, publicationId)
   database.prepare("UPDATE publication_lifecycle SET changed_at=? WHERE publication_id=? AND state='present'")
     .run(importedAt, publicationId)
+}
+
+function studyPlan(name: string) {
+  return {
+    name,
+    dailyNewLimit: 20,
+    dailyReviewLimit: 100,
+    sources: [{ type: 'reader_manual' as const, ref: 'favorite' }],
+  }
+}
+
+function studyWord(lemma: string) {
+  return {
+    lexemeKey: `lex_en_${lemma.replace(/[^a-z]/g, '').padEnd(24, '0').slice(0, 24)}`,
+    lemma,
+    phonetic: null,
+    briefMeanings: [lemma],
+    senses: [],
+    bnc: 1,
+    frequency: 1,
+  }
+}
+
+function countRows(device: TestDevice, from: string): number {
+  return Number((device.database.getConnection().prepare(`SELECT COUNT(*) count FROM ${from}`).get() as { count: number }).count)
 }
 
 function epubFormats(): PublicationFormatRegistry {

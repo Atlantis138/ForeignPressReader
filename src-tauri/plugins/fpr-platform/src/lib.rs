@@ -440,6 +440,9 @@ impl<R: Runtime> Foundation<R> {
             .map_err(Into::into)
     }
 
+    pub fn speech_queue_command(&self, command: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
+        self.0.run_mobile_plugin(command,payload).map_err(Into::into)
+    }
     pub fn pause_speech(&self) -> Result<()> {
         self.0
             .run_mobile_plugin("pauseSpeech", ())

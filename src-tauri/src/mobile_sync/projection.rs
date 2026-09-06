@@ -1,13 +1,27 @@
 use super::*;
 
 pub fn validate_batch(batch: &SyncBatch, recipient_device_id: &str) -> Result<(), PlatformError> {
-    if batch.model_version != SYNC_MODEL_VERSION
-        || batch.recipient_device_id != recipient_device_id
-        || batch.sender_device_id.is_empty()
+    if !matches!(
+        batch.model_version,
+        PREVIOUS_SYNC_MODEL_VERSION | 3 | SYNC_MODEL_VERSION
+    ) || batch.recipient_device_id != recipient_device_id
+        || !valid_sync_identifier(&batch.sender_device_id, batch.model_version)
         || batch.sender_device_id == recipient_device_id
-        || Uuid::parse_str(&batch.batch_id).is_err()
+        || !valid_sync_identifier(&batch.batch_id, batch.model_version)
         || batch.sender_revision < 0
         || !matches!(batch.mode.as_str(), "snapshot" | "incremental")
+        || batch
+            .from_sender_revision_exclusive
+            .is_some_and(|revision| revision < 0 || revision > batch.sender_revision)
+        || batch
+            .inspected_peer_revision
+            .is_some_and(|revision| revision < 0)
+        || (batch.mode == "snapshot"
+            && (batch.from_sender_revision_exclusive.is_some()
+                || batch.inspected_peer_revision.is_some()))
+        || (batch.mode == "incremental"
+            && (batch.from_sender_revision_exclusive.is_none()
+                || batch.inspected_peer_revision.is_none()))
         || chrono::DateTime::parse_from_rfc3339(&batch.created_at).is_err()
         || batch.records.len() > MAX_RECORDS
         || batch.blobs.len() > MAX_BLOBS
@@ -18,16 +32,37 @@ pub fn validate_batch(batch: &SyncBatch, recipient_device_id: &str) -> Result<()
     let mut present = HashMap::new();
     for record in &batch.records {
         if record.revision < 0
+            || record.revision > batch.sender_revision
             || record.key.is_empty()
+            || record.key.len() > 512
             || logical_key(&record.entity_type, &record.value)? != record.key
             || !identities.insert(identity(&record.entity_type, &record.key))
         {
             return Err(sync_invalid("同步逻辑记录无效或重复。"));
         }
+        if record.entity_type == "setting"
+            && crate::library_sync_settings::is_entity_key(&record.key)
+            && (batch.model_version < 3
+                || !record.value.get("value").is_some_and(|value| {
+                    crate::library_sync_settings::valid_entity_setting(&record.key, value)
+                }))
+        {
+            return Err(sync_invalid("同步书库细粒度记录无效。"));
+        }
+        if record.entity_type == "reader-record" {
+            if batch.model_version < 4 {
+                return Err(sync_invalid("阅读数据需要同步模型 v4。"));
+            }
+            crate::reader_records::validate(&record.value)?;
+        }
         if record.entity_type == "publication-lifecycle" {
+            let publication_id = required_string(&record.value, "publicationId")?;
             let hash = required_string(&record.value, "contentHash")?;
             let state = required_string(&record.value, "state")?;
-            if !valid_sha256(hash) || !matches!(state, "present" | "deleted") {
+            if !publication_package::is_safe_publication_id(publication_id)
+                || !valid_sha256(hash)
+                || !matches!(state, "present" | "deleted")
+            {
                 return Err(sync_invalid("同步刊物生命周期无效。"));
             }
             if state == "present" {
@@ -39,6 +74,8 @@ pub fn validate_batch(batch: &SyncBatch, recipient_device_id: &str) -> Result<()
     for blob in &batch.blobs {
         if blob.kind != "publication-package"
             || blob.media_type != "application/vnd.foreign-press-reader.publication+zip"
+            || !publication_package::is_safe_publication_id(&blob.publication_id)
+            || !valid_format_id(&blob.format_id)
             || !valid_sha256(&blob.sha256)
             || !valid_sha256(&blob.content_sha256)
             || blob.byte_length == 0
@@ -59,6 +96,27 @@ pub fn validate_batch(batch: &SyncBatch, recipient_device_id: &str) -> Result<()
     Ok(())
 }
 
+fn valid_format_id(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+fn valid_sync_identifier(value: &str, model_version: i64) -> bool {
+    if model_version >= 3 {
+        return Uuid::parse_str(value).is_ok();
+    }
+    (1..=100).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
 pub fn stable_payload_sha256(batch: &SyncBatch) -> Result<String, PlatformError> {
     let value = serde_json::to_value(batch).map_err(|_| sync_invalid("同步批次无法序列化。"))?;
     Ok(hex::encode(Sha256::digest(
@@ -69,9 +127,23 @@ pub fn stable_payload_sha256(batch: &SyncBatch) -> Result<String, PlatformError>
 pub(super) fn export_logical_records(
     connection: &Connection,
     revisions: &HashMap<String, i64>,
+    selection: Option<&[SyncEntityRef]>,
 ) -> Result<Vec<LogicalRecord>, PlatformError> {
-    mobile_portable::sync_export_raw_records(connection)?
+    let mut selected_tables: HashMap<String, Vec<String>> = HashMap::new();
+    if let Some(refs) = selection {
+        for item in refs {
+            selected_tables
+                .entry(entity_table(&item.entity_type)?.to_owned())
+                .or_default()
+                .push(item.key.clone());
+        }
+    }
+    mobile_portable::sync_export_raw_records(connection, selection.map(|_| &selected_tables))?
         .into_iter()
+        .filter(|raw| {
+            raw.table != "settings"
+                || raw.record.get("key").and_then(Value::as_str) != Some("library.management")
+        })
         .map(|raw| {
             let (entity_type, key) = raw_identity(&raw)?;
             let value = raw_to_logical_value(&raw)?;
@@ -89,6 +161,7 @@ fn raw_identity(raw: &SyncRawRecord) -> Result<(&'static str, String), PlatformE
     let (entity_type, keys): (&str, &[&str]) = match raw.table.as_str() {
         "publication_lifecycle" => ("publication-lifecycle", &["publicationId"]),
         "settings" => ("setting", &["key"]),
+        "reader_records" => ("reader-record", &["recordId"]),
         "reading_positions" => ("reading-position", &["publicationId"]),
         "user_lexemes" => ("user-lexeme", &["lexemeKey"]),
         "lexeme_examples" => ("lexeme-example", &["exampleId"]),
@@ -194,6 +267,7 @@ pub(super) fn table_entity(table: &str) -> Result<&'static str, PlatformError> {
     match table {
         "publication_lifecycle" => Ok("publication-lifecycle"),
         "settings" => Ok("setting"),
+        "reader_records" => Ok("reader-record"),
         "reading_positions" => Ok("reading-position"),
         "user_lexemes" => Ok("user-lexeme"),
         "lexeme_examples" => Ok("lexeme-example"),
@@ -218,6 +292,7 @@ fn entity_table(entity_type: &str) -> Result<&'static str, PlatformError> {
     match entity_type {
         "publication-lifecycle" => Ok("publication_lifecycle"),
         "setting" => Ok("settings"),
+        "reader-record" => Ok("reader_records"),
         "reading-position" => Ok("reading_positions"),
         "user-lexeme" => Ok("user_lexemes"),
         "lexeme-example" => Ok("lexeme_examples"),
@@ -242,6 +317,7 @@ fn logical_key(entity_type: &str, value: &Value) -> Result<String, PlatformError
     let fields: &[&str] = match entity_type {
         "publication-lifecycle" => &["publicationId"],
         "setting" => &["key"],
+        "reader-record" => &["recordId"],
         "reading-position" => &["publicationId"],
         "user-lexeme" => &["lexemeKey"],
         "lexeme-example" => &["exampleId"],
@@ -345,6 +421,7 @@ fn dependency_rank(record: &LogicalRecord) -> i32 {
         "setting" => 5,
         "user-lexeme" => 10,
         "lexeme-example" => 12,
+        "reader-record" => 16,
         "reading-position" => 15,
         "saved-context" | "vocabulary-source" => 20,
         "study-plan" => 30,

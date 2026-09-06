@@ -128,10 +128,32 @@ export class EpubImporter {
       )
       const navTitle = navigationLabels.get(stripFragment(item.href)) ?? ''
       const itemTitle = headingTitle || documentTitle || navTitle || `文章 ${articlePosition + 1}`
-      const paragraphCount = $('body p').filter((_, element) => !$(element).hasClass('link_navbar')).length
-      const wordCount = cleanText($('body').text()).split(/\s+/).filter(Boolean).length
+      // Preserve prose wrapped in generic containers. Wrap only runs outside existing
+      // semantic blocks, keeping their text-based IDs and document order unchanged.
+      for (const container of $('body, div, section, article, td, th').toArray().reverse()) {
+        const children = $(container).contents().toArray()
+        const isInline = (node: typeof children[number]) => node.type === 'text'
+          || /^(span|a|em|strong|b|i|br|sup|sub|small)$/.test(String((node as any).tagName ?? '').toLowerCase())
+        if (!children.some(node => isInline(node) && cleanText($(node).text()))) continue
+        let run: any[] = []
+        const fragments: string[] = []
+        const flush = () => {
+          if (run.length && cleanText(run.map(node => $(node).text()).join(''))) {
+            fragments.push(`<p>${run.map(node => $.html(node)).join('')}</p>`)
+          } else fragments.push(...run.map(node => $.html(node)))
+          run = []
+        }
+        for (const node of children) {
+          if (isInline(node)) run.push(node)
+          else { flush(); fragments.push($.html(node)) }
+        }
+        flush()
+        $(container).html(fragments.join(''))
+      }
+      const paragraphCount = $('body p, body li, body blockquote').filter((_, element) =>
+        !$(element).closest('.link_navbar').length && Boolean(cleanText($(element).text()))).length
 
-      if (paragraphCount === 0 || wordCount < 15) {
+      if (paragraphCount === 0 && !$('body img').length) {
         const sectionTitle = itemTitle
         if (sectionTitle && !looksLikeFrontmatter(sectionTitle)) {
           currentSection = {

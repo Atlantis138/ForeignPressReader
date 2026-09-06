@@ -36,6 +36,21 @@ describe('DeepSeekTranslationService', () => {
     const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
     expect(request.model).toBe('deepseek-v4-flash')
     expect(request.thinking).toEqual({ type: 'disabled' })
+    await expect(service.translateArticle('article_12345678', true)).resolves.toMatchObject({ cached: false })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('reserves the article before asynchronous key retrieval and releases a failed reservation', async () => {
+    let rejectKey!: (reason: Error) => void
+    const service = new DeepSeekTranslationService(fakeRepository() as never,
+      { getApiKey: () => new Promise<string>((_, reject) => { rejectKey = reject }) }, () => undefined)
+    const first = service.translateArticle('article_12345678')
+    await expect(service.translateArticle('article_12345678')).rejects.toThrow()
+    rejectKey(new Error('key unavailable'))
+    await expect(first).rejects.toThrow('key unavailable')
+    const retry = service.translateArticle('article_12345678')
+    rejectKey(new Error('retried key retrieval'))
+    await expect(retry).rejects.toThrow('retried key retrieval')
   })
 
   it('retries only segments missing from a partial model response', async () => {

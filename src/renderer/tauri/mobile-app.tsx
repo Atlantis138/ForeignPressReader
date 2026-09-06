@@ -1,3 +1,5 @@
+import { ArticleSearch } from '../reader/ReadingTools'
+import { ErrorState } from './mobile-ui'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { StudySessionState } from '../../shared/types'
 import { TauriMobileAppClient } from './mobile-app-client'
@@ -23,6 +25,7 @@ import {
   parseMobileShellState,
   popMobileRoute,
   pushMobileRoute,
+  reconcileMobileRoutesAfterDataMerge,
   replaceTabRoot,
   routeKey,
   selectPrimaryTab,
@@ -142,9 +145,11 @@ export function MobileReadingApp() {
     libraryState,
     setLibraryState,
     libraryReady,
+    libraryError,
     publication,
     preferences,
     reloadLibrary,
+    reloadSynchronizedData,
     importPublication,
     savePreferences,
   } = useMobileReadingController({
@@ -157,6 +162,13 @@ export function MobileReadingApp() {
     onNotice: setSnackbar,
     onTask: setTask,
   })
+
+  const handleExternalDataChange = useCallback(async () => {
+    studyClient.invalidateCachedData()
+    setStudySession(null)
+    setShell((current) => reconcileMobileRoutesAfterDataMerge(current))
+    await reloadSynchronizedData()
+  }, [reloadSynchronizedData])
 
   const selectTab = useCallback((tab: PrimaryTab) => {
     if (tab === shell.activeTab && tab === 'library') setLibrarySelection(exitLibrarySelection())
@@ -225,7 +237,8 @@ export function MobileReadingApp() {
       snackbar={snackbar}
       onDismissSnackbar={() => setSnackbar(null)}
     >
-      {route.name === 'library' && !libraryReady && <div className="mobile-page"><Skeleton lines={8} /></div>}
+      {route.name === 'library' && !libraryReady && <div className="mobile-page">{libraryError ? <ErrorState description={libraryError} onRetry={() => void reloadLibrary()} /> : <Skeleton lines={8} />}</div>}
+      {route.name === 'library' && libraryReady && <ArticleSearch reader={mobileAppClient.reader} onOpen={(publicationId,articleId)=>navigate({name:'article',publicationId,articleId})} />}
       {route.name === 'library' && libraryReady && <MobileLibrary
         client={mobileAppClient}
         state={libraryState}
@@ -282,7 +295,7 @@ export function MobileReadingApp() {
       {route.name === 'study-session' && studySession && <MobileStudySessionPage client={studyClient} speech={speechClient} session={studySession} onSession={setStudySession} onBack={goBack} onOpenLexeme={(lexemeKey) => navigate({ name: 'lexeme', lexemeKey, hostTab: 'study' })} onError={setError} onNotice={setSnackbar} />}
       {route.name === 'study-session' && !studySession && <div className="mobile-page"><Skeleton lines={5} /></div>}
       {route.name === 'settings' && <MobileSettingsHome preferences={preferences} developerVisible={developerVisible} onTitleTap={tapSettingsTitle} onOpen={(section) => navigate({ name: 'settings-section', section })} />}
-      {route.name === 'settings-section' && <MobileSettingsSectionPage clients={mobileAppClient} section={route.section} preferences={preferences} onBack={goBack} onOpen={(section) => navigate({ name: 'settings-section', section })} onChange={(next) => void savePreferences(next)} onError={setError} onNotice={setSnackbar} onTask={setTask} />}
+      {route.name === 'settings-section' && <MobileSettingsSectionPage clients={mobileAppClient} section={route.section} preferences={preferences} onBack={goBack} onOpen={(section) => navigate({ name: 'settings-section', section })} onChange={(next) => void savePreferences(next)} onDataChanged={handleExternalDataChange} onError={setError} onNotice={setSnackbar} onTask={setTask} />}
       {appearanceOpen && (
         <AppearanceSheet preferences={preferences} onChange={(next) => void savePreferences(next)} onClose={() => setAppearanceOpen(false)} />
       )}

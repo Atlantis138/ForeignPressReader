@@ -1,3 +1,8 @@
+import { publicationContentHash } from './publication-content'
+import { repairPublication } from './publication-repair'
+import type { SyncEntityRef } from '../core/sync-model'
+import { ReaderRepository } from './reader-repository'
+import type { ArticleReadingChange, ArticleSearchQuery } from '../shared/reader-types'
 import type { DatabaseSync } from 'node:sqlite'
 import crypto from 'node:crypto'
 import type {
@@ -46,7 +51,9 @@ import { TRANSLATION_PROMPT_VERSION } from '../core/translation-service'
 import { createDefaultSpeechProviderRegistry } from '../core/speech-providers'
 import type { VocabularyContext } from '../core/lexicon/ports'
 import { AppDatabase } from './sqlite-database'
+import { writeLibraryManagementSettings } from './library-sync-settings'
 import { PortableSqliteRepository } from './portable-database'
+import type { LibrarySyncDataMode } from './portable-database'
 
 type Row = Record<string, unknown>
 
@@ -126,8 +133,8 @@ export class SqliteApplicationRepository {
     return this.portable.getParsedPublicationPlan(publicationId, assetPaths)
   }
 
-  exportPortableUserData(): PortableUserData {
-    return this.portable.exportPortableUserData()
+  exportPortableUserData(selection?: readonly Pick<SyncEntityRef, 'type' | 'key'>[]): PortableUserData {
+    return this.portable.exportPortableUserData(selection)
   }
 
   iteratePortableDataset(dataset: PortableDatasetKey): Iterable<PortableDatasetRecord> {
@@ -140,8 +147,9 @@ export class SqliteApplicationRepository {
     policy: PortableMergePolicy = 'newer-wins',
     manageTransaction = true,
     finalizeStudy = true,
+    librarySyncMode: LibrarySyncDataMode = 'auto',
   ): PortableMergeResult {
-    return this.portable.mergePortableUserData(data, policy, manageTransaction, finalizeStudy)
+    return this.portable.mergePortableUserData(data, policy, manageTransaction, finalizeStudy, librarySyncMode)
   }
 
   beginPortableMerge(): void { this.portable.beginPortableMerge() }
@@ -151,10 +159,11 @@ export class SqliteApplicationRepository {
   applyIncomingSyncData(
     data: Parameters<SqliteApplicationRepository['mergePortableUserData']>[0],
     receipt: { senderDeviceId: string; batchId: string; payloadSha256: string; senderThroughRevision: number },
+    librarySyncMode: LibrarySyncDataMode,
   ): PortableMergeResult {
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      const merged = this.mergePortableUserData(data, 'incoming-wins', false)
+      const merged = this.mergePortableUserData(data, 'incoming-wins', false, true, librarySyncMode)
       this.saveSyncReceipt(receipt.senderDeviceId, receipt.batchId, receipt.payloadSha256, receipt.senderThroughRevision)
       const peer = this.getSyncPeerState(receipt.senderDeviceId)
       this.saveSyncPeerState(receipt.senderDeviceId, {
@@ -416,6 +425,13 @@ export class SqliteApplicationRepository {
     }
   }
 
+  repairPublication(plan: ParsedPublicationPlan): boolean { return repairPublication(this.db,plan, this.deviceId) }
+  getArticleTitle(id: string): string | null {
+    const row = this.db.prepare('SELECT title FROM articles WHERE id=?').get(id)
+    return typeof row?.title === 'string' ? row.title : null
+  }
+  getPublicationContentHash(id: string): string { return publicationContentHash(this.db,id) }
+
   listPublications(): PublicationSummary[] {
     const management = this.getLibraryManagement()
     const rows = this.db.prepare(`
@@ -556,7 +572,14 @@ export class SqliteApplicationRepository {
     }
   }
 
+  private get reading(): ReaderRepository { return new ReaderRepository(this.db, this.deviceId) }
+  searchArticles(query: ArticleSearchQuery) { return this.reading.search(query) }
+  getReadingData(articleId: string) { return this.reading.get(articleId) }
+  changeReadingData(articleId: string, change: ArticleReadingChange) { return this.reading.change(articleId, change) }
+  preserveTranslations(articleId: string) { return this.reading.preserveTranslations(articleId) }
+
   getArticle(id: string): ArticleDetail {
+    const selected = this.reading.selectedTranslations(id)
     const { provider, model } = translationProviders.resolve(this.getTranslationPreferences())
     const cacheModel = translationCacheModel(provider, model)
     const row = this.db.prepare(`
@@ -578,8 +601,7 @@ export class SqliteApplicationRepository {
     const findTranslation = this.db.prepare(`
       SELECT text FROM translations
       WHERE block_id = ? AND source_hash = ? AND target_language = 'zh-CN'
-        AND model = ? AND prompt_version = ?
-      ORDER BY created_at DESC LIMIT 1
+      ORDER BY (model = ? AND prompt_version = ?) DESC, created_at DESC LIMIT 1
     `)
 
     return {
@@ -587,7 +609,7 @@ export class SqliteApplicationRepository {
       publicationId: String(row.publication_id),
       publicationTitle: this.libraryTitle(String(row.publication_id), String(row.publication_title)),
       sectionTitle: row.section_title == null ? null : String(row.section_title),
-      savedPosition: {
+      savedPosition: this.reading.position(id) ?? {
         scrollTop: Number(row.saved_scroll_top ?? 0),
         anchorBlockId: row.saved_anchor_block_id == null ? null : String(row.saved_anchor_block_id),
         anchorTokenIndex: row.saved_anchor_token_index == null ? null : Number(row.saved_anchor_token_index),
@@ -611,7 +633,7 @@ export class SqliteApplicationRepository {
             ? null
             : `reader-asset://asset/${encodeURIComponent(String(row.publication_id))}/${String(block.asset_path).split('/').map(encodeURIComponent).join('/')}`,
           alt: block.alt == null ? null : String(block.alt),
-          translation: translation?.text == null ? null : String(translation.text),
+          translation: selected ? (selected.get(String(block.id))?.sourceHash === hashText(text ?? '') ? selected.get(String(block.id))!.text : null) : translation?.text == null ? null : String(translation.text),
         }
       }),
     }
@@ -1064,10 +1086,11 @@ export class SqliteApplicationRepository {
 
   private writeLibraryManagement(value: LibraryManagementRecord): void {
     const normalized = normalizeLibraryManagement(value)
-    this.db.prepare(`
-      INSERT INTO settings (key, value, updated_at, device_id) VALUES ('library.management', ?, ?, ?)
-      ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, device_id=excluded.device_id
-    `).run(JSON.stringify(normalized), new Date().toISOString(), this.deviceId)
+    writeLibraryManagementSettings(
+      this.db,
+      this.deviceId,
+      normalized as unknown as Record<string, unknown>,
+    )
   }
 
   private libraryTitle(publicationId: string, originalTitle: string): string {
@@ -1128,7 +1151,7 @@ function normalizeLibraryManagement(value: Partial<LibraryManagementRecord>): Li
   for (const candidate of Array.isArray(value.categories) ? value.categories : []) {
     if (!candidate || typeof candidate !== 'object') continue
     const id = String(candidate.id ?? '')
-    const name = String(candidate.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 100)
+    const name = normalizeLibraryText(String(candidate.name ?? ''), 100)
     const folded = name.toLocaleLowerCase('zh-CN')
     if (!/^category_[a-f0-9]{32}$/.test(id) || !name || categoryIds.has(id) || categoryNames.has(folded)) continue
     categoryIds.add(id)
@@ -1144,7 +1167,7 @@ function normalizeLibraryManagement(value: Partial<LibraryManagementRecord>): Li
     for (const [publicationId, candidate] of Object.entries(value.items)) {
       if (!/^[a-zA-Z0-9_-]{8,80}$/.test(publicationId) || !candidate || typeof candidate !== 'object') continue
       const customTitle = typeof candidate.customTitle === 'string'
-        ? candidate.customTitle.trim().replace(/\s+/g, ' ').slice(0, 200) || null
+        ? normalizeLibraryText(candidate.customTitle, 200) || null
         : null
       const categoryId = typeof candidate.categoryId === 'string' && categoryIds.has(candidate.categoryId)
         ? candidate.categoryId
@@ -1179,9 +1202,13 @@ function normalizeActiveCategory(value: unknown, categories: LibraryCategory[]):
 }
 
 function normalizeLibraryName(value: string, label: string): string {
-  const normalized = value.trim().replace(/\s+/g, ' ').slice(0, 100)
+  const normalized = normalizeLibraryText(value, 100)
   if (!normalized) throw new Error(`${label}不能为空`)
   return normalized
+}
+
+function normalizeLibraryText(value: string, limit: number): string {
+  return Array.from(value.trim().replace(/\s+/g, ' ')).slice(0, limit).join('')
 }
 
 function assertUniqueCategoryName(categories: LibraryCategory[], name: string, exceptId?: string): void {

@@ -1,3 +1,4 @@
+import type { SyncChangePage } from '../../shared/types'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type {
@@ -97,6 +98,9 @@ export class TauriMobileSyncClient extends TauriLogicalClient implements SyncApi
   }
   sendTo(deviceId: string): Promise<SyncPageState> {
     return this.call('send_mobile_sync_to', { deviceId })
+  }
+  getIncomingChanges(transferId: string, offset: number, limit: number): Promise<SyncChangePage> {
+    return this.call('get_mobile_sync_incoming_changes', { transferId, offset, limit })
   }
   acceptIncoming(transferId: string): Promise<SyncPageState> {
     return this.call('accept_mobile_sync_incoming', { transferId })

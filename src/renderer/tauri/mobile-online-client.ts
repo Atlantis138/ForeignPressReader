@@ -41,8 +41,8 @@ export class TauriMobileTranslationClient implements MobileTranslationClient {
     return this.call('test_mobile_translation_connection')
   }
 
-  translateArticle(articleId: string): Promise<TranslationResult> {
-    return this.call('translate_mobile_article', { articleId })
+  translateArticle(articleId: string, force = false): Promise<TranslationResult> {
+    return this.call('translate_mobile_article', { articleId, force })
   }
 
   cancel(articleId: string): Promise<void> {
@@ -95,6 +95,9 @@ export class TauriMobileSpeechClient implements MobileSpeechClient {
     return this.call('play_mobile_speech', { request })
   }
 
+  playQueue(request: Parameters<MobileSpeechClient['playQueue']>[0]): Promise<void> { return this.call('start_mobile_speech_queue',{request}) }
+  getQueueState(): ReturnType<MobileSpeechClient['getQueueState']> { return this.call('get_mobile_speech_queue_state') }
+  seekQueue(index:number): Promise<void> { return this.call('seek_mobile_speech_queue',{index}) }
   pause(): Promise<void> { return this.call('pause_mobile_speech') }
   resume(): Promise<void> { return this.call('resume_mobile_speech') }
   stop(): Promise<void> { return this.call('stop_mobile_speech') }

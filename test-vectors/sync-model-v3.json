@@ -1,0 +1,52 @@
+{
+  "vectorVersion": 1,
+  "expectedStablePayloadSha256": "dc826194ddbda3577534961f0cab0636629542a84ddd2b6d6bd17f2090e08db4",
+  "batch": {
+    "modelVersion": 3,
+    "batchId": "33333333-3333-4333-8333-333333333333",
+    "senderDeviceId": "11111111-1111-4111-8111-111111111111",
+    "recipientDeviceId": "22222222-2222-4222-8222-222222222222",
+    "createdAt": "2026-07-31T00:00:00.000Z",
+    "mode": "snapshot",
+    "fromSenderRevisionExclusive": null,
+    "senderRevision": 2,
+    "inspectedPeerRevision": null,
+    "records": [
+      {
+        "type": "setting",
+        "key": "library.category.category_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "revision": 1,
+        "value": {
+          "key": "library.category.category_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "value": {
+            "id": "category_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "name": "Weekly",
+            "createdAt": "2026-07-30T00:00:00.000Z",
+            "state": "present",
+            "deletedAt": null
+          },
+          "updatedAt": "2026-07-31T00:00:00.000Z",
+          "deviceId": "11111111-1111-4111-8111-111111111111"
+        }
+      },
+      {
+        "type": "setting",
+        "key": "library.item.pub_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "revision": 2,
+        "value": {
+          "key": "library.item.pub_aaaaaaaaaaaaaaaaaaaaaaaa",
+          "value": {
+            "publicationId": "pub_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "customTitle": "My Weekly",
+            "categoryId": "category_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "state": "present",
+            "deletedAt": null
+          },
+          "updatedAt": "2026-07-31T00:00:00.000Z",
+          "deviceId": "11111111-1111-4111-8111-111111111111"
+        }
+      }
+    ],
+    "blobs": []
+  }
+}

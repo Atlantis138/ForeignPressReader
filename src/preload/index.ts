@@ -33,6 +33,9 @@ const api: AppApi = {
     getPublication: (id) => ipcRenderer.invoke('library:getPublication', id),
   },
   reader: {
+    searchArticles: (query) => ipcRenderer.invoke('reader:searchArticles', query),
+    getReadingData: (id) => ipcRenderer.invoke('reader:getReadingData', id),
+    changeReadingData: (id, change) => ipcRenderer.invoke('reader:changeReadingData', id, change),
     getArticle: (id) => ipcRenderer.invoke('reader:getArticle', id),
     savePosition: (publicationId, articleId, position) =>
       ipcRenderer.invoke('reader:savePosition', publicationId, articleId, requireReadingPosition(position)),
@@ -50,7 +53,7 @@ const api: AppApi = {
     synthesize: (request: SpeechSynthesisRequest) => ipcRenderer.invoke('speech:synthesize', request),
   },
   translation: {
-    translateArticle: (articleId) => ipcRenderer.invoke('translation:translateArticle', articleId),
+    translateArticle: (articleId, force = false) => ipcRenderer.invoke('translation:translateArticle', articleId, force),
     cancel: (articleId) => ipcRenderer.invoke('translation:cancel', articleId),
     onProgress: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, progress: TranslationProgress) => callback(progress)
@@ -159,6 +162,7 @@ const api: AppApi = {
     confirmPairing: (sessionId) => ipcRenderer.invoke('sync:confirmPairing', sessionId),
     rejectPairing: (sessionId) => ipcRenderer.invoke('sync:rejectPairing', sessionId),
     sendTo: (deviceId) => ipcRenderer.invoke('sync:sendTo', deviceId),
+    getIncomingChanges: (transferId, offset, limit) => ipcRenderer.invoke('sync:getIncomingChanges', transferId, offset, limit),
     acceptIncoming: (transferId) => ipcRenderer.invoke('sync:acceptIncoming', transferId),
     rejectIncoming: (transferId) => ipcRenderer.invoke('sync:rejectIncoming', transferId),
       cancelOperation: () => ipcRenderer.invoke('sync:cancelOperation'),

@@ -21,12 +21,12 @@ use std::{
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 const FORMAT: &str = "foreign-press-reader-portable";
-pub const FORMAT_VERSION: i64 = 2;
+pub const FORMAT_VERSION: i64 = 4;
 const CONTENT_ID_VERSION: i64 = 2;
 const MAX_ARCHIVE_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 const MAX_ENTRIES: usize = 10_000;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
-const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
+const MAX_SETTINGS_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_EXPANSION_RATIO: u64 = 2_000;
 const SETTINGS: &[&str] = &[
@@ -98,6 +98,15 @@ pub(crate) struct SyncIncomingMergeResult {
     pub local_revision: i64,
 }
 
+const READER_RECORD: &[Column] = &[
+    c!("recordId", "record_id"),
+    c!("publicationId", "publication_id"),
+    c!("articleId", "article_id"),
+    c!("kind", "kind"),
+    c!("payload", "payload"),
+    c!("updatedAt", "updated_at"),
+    c!("deviceId", "device_id"),
+];
 const LIFECYCLE: &[Column] = &[
     c!("publicationId", "publication_id"),
     c!("contentHash", "content_hash"),
@@ -295,6 +304,7 @@ const RESET: &[Column] = &[
 ];
 
 const DATASETS: &[Dataset] = &[
+    Dataset { path: "data/reader-records.ndjson", kind: "reader-records", table: "reader_records", columns: READER_RECORD, keys: &["record_id"], version: Some(("updated_at", "device_id")), immutable: false, settings_json: false, update_columns: None, custom_update: None },
     Dataset { path: "data/publication-lifecycle.ndjson", kind: "publication-lifecycle", table: "publication_lifecycle", columns: LIFECYCLE, keys: &["publication_id"], version: Some(("changed_at", "device_id")), immutable: false, settings_json: false, update_columns: None, custom_update: None },
     Dataset { path: "data/settings.json", kind: "settings", table: "settings", columns: SETTING, keys: &["key"], version: Some(("updated_at", "device_id")), immutable: false, settings_json: true, update_columns: None, custom_update: None },
     Dataset { path: "data/reading-positions.ndjson", kind: "reading-positions", table: "reading_positions", columns: POSITION, keys: &["publication_id"], version: Some(("updated_at", "device_id")), immutable: false, settings_json: false, update_columns: None, custom_update: None },
@@ -327,6 +337,8 @@ struct ManifestFile {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ManifestCounts {
+    #[serde(default)]
+    reader_records: Option<usize>,
     publications: usize,
     settings: usize,
     reading_positions: usize,
@@ -373,6 +385,7 @@ pub struct PortableImportPreview {
     pub new_publication_count: usize,
     pub duplicate_publication_count: usize,
     pub setting_count: usize,
+    pub reader_record_count: usize,
     pub reading_position_count: usize,
     pub vocabulary_count: usize,
     pub vocabulary_source_count: usize,
@@ -759,6 +772,7 @@ pub fn inspect_archive(
         new_publication_count: metadata.packages.len(),
         duplicate_publication_count: duplicates,
         setting_count: count("settings"),
+        reader_record_count: count("reader_records"),
         reading_position_count: count("reading_positions"),
         vocabulary_count: scan.active_vocabulary.len(),
         vocabulary_source_count: count_active("vocabulary_sources"),
@@ -883,8 +897,22 @@ pub fn merge_archive(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| PlatformError::storage_unavailable())?;
     let mut result = MergeResult::default();
+    let fine_grained_library = manifest.format_version >= 3;
+    let mut legacy_management_changed = false;
+    let mut library_records_incoming = false;
     for dataset in DATASETS {
         visit_dataset_records(archive_path, &manifest, dataset, |mut record| {
+            if dataset.table == "settings"
+                && record
+                    .get("key")
+                    .and_then(Value::as_str)
+                    .is_some_and(|key| {
+                        key == "library.management"
+                            || crate::library_sync_settings::is_entity_key(key)
+                    })
+            {
+                library_records_incoming = true;
+            }
             if !normalize_record(&transaction, dataset, &mut record)? {
                 return Ok(());
             }
@@ -896,24 +924,24 @@ pub fn merge_archive(
                 return Ok(());
             }
             if merge_record(&transaction, dataset, &record, MergePolicy::NewerWins)? {
+                if dataset.table == "settings"
+                    && record.get("key").and_then(Value::as_str) == Some("library.management")
+                {
+                    legacy_management_changed = true;
+                }
                 increment_merge(&mut result, dataset.table);
             }
             Ok(())
         })?;
-        if dataset.table == "study_lexeme_resets" {
-            apply_resets(&transaction)?;
-        }
     }
-    let reset: Option<String> = transaction
-        .query_row(
-            "SELECT reset_at FROM study_progress_state WHERE state_id='global'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|_| PlatformError::database_corrupt())?
-        .flatten();
-    if reset.is_some() {
+    crate::library_sync_settings::reconcile(
+        &transaction,
+        fine_grained_library && library_records_incoming,
+        legacy_management_changed,
+    )?;
+    let has_resets = apply_resets(&transaction)?;
+    reconcile_transient_study_state(&transaction)?;
+    if has_resets {
         transaction.execute("DELETE FROM scheduler_profiles WHERE NOT EXISTS(SELECT 1 FROM review_events WHERE review_events.profile_id=scheduler_profiles.profile_id)", []).map_err(|_| PlatformError::storage_unavailable())?;
     }
     transaction
@@ -924,10 +952,17 @@ pub fn merge_archive(
 
 pub(crate) fn sync_export_raw_records(
     connection: &Connection,
+    selection: Option<&HashMap<String, Vec<String>>>,
 ) -> Result<Vec<SyncRawRecord>, PlatformError> {
     let mut result = Vec::new();
     for dataset in DATASETS {
-        for value in export_records(connection, dataset)? {
+        let keys = selection.map(|selection| {
+            selection
+                .get(dataset.table)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+        });
+        for value in export_records(connection, dataset, keys)? {
             let Value::Object(record) = value else {
                 return Err(PlatformError::database_corrupt());
             };
@@ -947,6 +982,7 @@ pub(crate) fn sync_apply_incoming_records(
     batch_id: &str,
     payload_sha256: &str,
     sender_revision: i64,
+    model_version: i64,
 ) -> Result<SyncIncomingMergeResult, PlatformError> {
     sync_apply_incoming_records_inner(
         database,
@@ -955,6 +991,7 @@ pub(crate) fn sync_apply_incoming_records(
         batch_id,
         payload_sha256,
         sender_revision,
+        model_version,
     )
     .map_err(|error| {
         if error.code == "storageUnavailable" {
@@ -976,6 +1013,7 @@ fn sync_apply_incoming_records_inner(
     batch_id: &str,
     payload_sha256: &str,
     sender_revision: i64,
+    model_version: i64,
 ) -> Result<SyncIncomingMergeResult, PlatformError> {
     let transaction = database
         .connection_mut()
@@ -1016,7 +1054,20 @@ fn sync_apply_incoming_records_inner(
     }
 
     let mut applied = 0_usize;
+    let mut legacy_management_changed = false;
+    let mut library_records_incoming = false;
     for raw in records {
+        if raw.table == "settings"
+            && raw
+                .record
+                .get("key")
+                .and_then(Value::as_str)
+                .is_some_and(|key| {
+                    key == "library.management" || crate::library_sync_settings::is_entity_key(key)
+                })
+        {
+            library_records_incoming = true;
+        }
         let dataset = DATASETS
             .iter()
             .find(|dataset| dataset.table == raw.table)
@@ -1034,11 +1085,23 @@ fn sync_apply_incoming_records_inner(
             continue;
         }
         if merge_record(&transaction, dataset, &record, MergePolicy::IncomingWins)? {
+            if dataset.table == "settings"
+                && record.get("key").and_then(Value::as_str) == Some("library.management")
+            {
+                legacy_management_changed = true;
+            }
             applied += 1;
         }
-        if dataset.table == "study_lexeme_resets" {
-            apply_resets(&transaction)?;
-        }
+    }
+    crate::library_sync_settings::reconcile(
+        &transaction,
+        model_version >= 3 && library_records_incoming,
+        legacy_management_changed,
+    )?;
+    let has_resets = apply_resets(&transaction)?;
+    reconcile_transient_study_state(&transaction)?;
+    if has_resets {
+        transaction.execute("DELETE FROM scheduler_profiles WHERE NOT EXISTS(SELECT 1 FROM review_events WHERE review_events.profile_id=scheduler_profiles.profile_id)", []).map_err(|_| PlatformError::storage_unavailable())?;
     }
     transaction
         .execute(
@@ -1104,13 +1167,45 @@ pub fn transfer_result(
     }
 }
 
-fn export_records(connection: &Connection, dataset: &Dataset) -> Result<Vec<Value>, PlatformError> {
-    let query = dataset_query(dataset);
+fn export_records(
+    connection: &Connection,
+    dataset: &Dataset,
+    keys: Option<&[String]>,
+) -> Result<Vec<Value>, PlatformError> {
+    if keys.is_some_and(|keys| keys.is_empty()) {
+        return Ok(Vec::new());
+    }
+    let mut query = dataset_query(dataset);
+    let mut parameters: Vec<SqlValue> = Vec::new();
+    if let Some(keys) = keys {
+        let projection = dataset
+            .keys
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("json_extract(value,'$[{index}]')"))
+            .collect::<Vec<_>>()
+            .join(",");
+        query = format!(
+            "SELECT * FROM ({query}) WHERE ({}) IN (SELECT {projection} FROM json_each(?1))",
+            dataset.keys.join(",")
+        );
+        parameters.push(SqlValue::Text(
+            serde_json::to_string(
+                &keys
+                    .iter()
+                    .map(|key| key.split('\u{1f}').collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|_| PlatformError::database_corrupt())?,
+        ));
+    }
     let mut statement = connection
         .prepare(&query)
         .map_err(|_| PlatformError::database_corrupt())?;
     let rows = statement
-        .query_map([], |row| row_to_json(row, dataset))
+        .query_map(params_from_iter(parameters), |row| {
+            row_to_json(row, dataset)
+        })
         .map_err(|_| PlatformError::database_corrupt())?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|_| PlatformError::database_corrupt())
@@ -1118,7 +1213,7 @@ fn export_records(connection: &Connection, dataset: &Dataset) -> Result<Vec<Valu
 
 fn dataset_query(dataset: &Dataset) -> String {
     let where_clause = if dataset.table == "settings" {
-        " WHERE key IN ('reader.preferences','dictionary.preferences','study.preferences','speech.preferences','translation.preferences','library.management')"
+        " WHERE key IN ('reader.preferences','dictionary.preferences','study.preferences','speech.preferences','translation.preferences','library.management') OR key LIKE 'library.category.%' OR key LIKE 'library.item.%'"
     } else {
         ""
     };
@@ -1227,7 +1322,7 @@ fn write_dataset_records(
             .len()
             > MAX_SETTINGS_BYTES
     {
-        return Err(invalid_backup("便携备份设置文件超过 1 MiB 限制。"));
+        return Err(invalid_backup("便携备份设置文件超过 16 MiB 限制。"));
     }
     Ok(count)
 }
@@ -1283,9 +1378,13 @@ fn validate_archive(path: &Path) -> Result<PortableManifest, PlatformError> {
     drop(manifest_file);
     let manifest: PortableManifest =
         serde_json::from_slice(&bytes).map_err(|_| invalid_backup("便携备份清单无效。"))?;
-    if manifest.format != FORMAT
-        || manifest.format_version != FORMAT_VERSION
-        || manifest.database_schema_version != LATEST_SCHEMA_VERSION
+    if (manifest.format_version >= 4 && manifest.counts.reader_records.is_none())
+        || manifest.format != FORMAT
+        || !matches!(manifest.format_version, 2 | 3 | FORMAT_VERSION)
+        || !matches!(
+            (manifest.format_version, manifest.database_schema_version),
+            (2, 2) | (3, 3) | (FORMAT_VERSION, LATEST_SCHEMA_VERSION)
+        )
         || manifest.content_id_version != CONTENT_ID_VERSION
         || manifest.policy != "essential-user-data"
     {
@@ -1325,7 +1424,7 @@ fn validate_archive(path: &Path) -> Result<PortableManifest, PlatformError> {
             return Err(invalid_backup("便携备份包含未知的数据文件。"));
         }
         if entry.path == "data/settings.json" && entry.size > MAX_SETTINGS_BYTES {
-            return Err(invalid_backup("便携备份设置文件超过 1 MiB 限制。"));
+            return Err(invalid_backup("便携备份设置文件超过 16 MiB 限制。"));
         }
         let mut source = archive
             .by_name(&entry.path)
@@ -1339,6 +1438,9 @@ fn validate_archive(path: &Path) -> Result<PortableManifest, PlatformError> {
         }
     }
     for dataset in DATASETS {
+        if dataset.table == "reader_records" && manifest.format_version < 4 {
+            continue;
+        }
         if !logical_seen.contains(dataset.path) {
             return Err(invalid_backup("便携备份缺少必要数据文件。"));
         }
@@ -1355,6 +1457,9 @@ fn visit_dataset_records<F>(
 where
     F: FnMut(Map<String, Value>) -> Result<(), PlatformError>,
 {
+    if dataset.table == "reader_records" && manifest.format_version < 4 {
+        return Ok(0);
+    }
     let mut archive =
         ZipArchive::new(File::open(path).map_err(|_| invalid_backup("无法读取便携备份。"))?)
             .map_err(|_| invalid_backup("文件不是有效的便携备份。"))?;
@@ -1369,7 +1474,7 @@ where
     let mut count = 0_usize;
     if dataset.settings_json {
         if file.size() > MAX_SETTINGS_BYTES {
-            return Err(invalid_backup("便携备份设置文件超过 1 MiB 限制。"));
+            return Err(invalid_backup("便携备份设置文件超过 16 MiB 限制。"));
         }
         let values: Vec<Value> =
             serde_json::from_reader(file).map_err(|_| invalid_backup("便携备份数据无效。"))?;
@@ -1504,19 +1609,28 @@ fn validate_record(dataset: &Dataset, record: &Map<String, Value>) -> Result<(),
     {
         return Err(invalid_backup("便携备份记录字段无效。"));
     }
+    if dataset.table == "reader_records" {
+        crate::reader_records::validate(&Value::Object(record.clone()))?;
+    }
     if dataset.table == "settings" {
         let key = record
             .get("key")
             .and_then(Value::as_str)
             .ok_or_else(|| invalid_backup("设置记录无效。"))?;
-        if !SETTINGS.contains(&key) {
+        if !SETTINGS.contains(&key) && !crate::library_sync_settings::is_entity_key(key) {
             return Err(invalid_backup("便携备份包含不允许的设置。"));
         }
         let encoded = record
             .get("value")
             .and_then(Value::as_str)
             .ok_or_else(|| invalid_backup("设置记录无效。"))?;
-        serde_json::from_str::<Value>(encoded).map_err(|_| invalid_backup("设置记录无效。"))?;
+        let value =
+            serde_json::from_str::<Value>(encoded).map_err(|_| invalid_backup("设置记录无效。"))?;
+        if crate::library_sync_settings::is_entity_key(key)
+            && !crate::library_sync_settings::valid_entity_setting(key, &value)
+        {
+            return Err(invalid_backup("书库同步设置记录无效。"));
+        }
     }
     for column in dataset.columns {
         let value = record.get(column.json).expect("validated key");
@@ -1547,9 +1661,13 @@ fn validate_record(dataset: &Dataset, record: &Map<String, Value>) -> Result<(),
     }
     if dataset.table == "publication_lifecycle"
         && (!record
-            .get("contentHash")
+            .get("publicationId")
             .and_then(Value::as_str)
-            .is_some_and(is_sha256)
+            .is_some_and(publication_package::is_safe_publication_id)
+            || !record
+                .get("contentHash")
+                .and_then(Value::as_str)
+                .is_some_and(is_sha256)
             || !matches!(
                 record.get("state").and_then(Value::as_str),
                 Some("present" | "deleted")
@@ -1637,6 +1755,15 @@ fn merge_record(
     if let Some(current) = current {
         if current == *record {
             return Ok(false);
+        }
+        if dataset.table == "reader_records"
+            && (record.get("kind").and_then(Value::as_str) == Some("translation")
+                || current.get("kind").and_then(Value::as_str) == Some("translation"))
+            && ["payload", "kind", "articleId", "publicationId"]
+                .iter()
+                .any(|key| record.get(*key) != current.get(*key))
+        {
+            return Err(invalid_backup("保留译文内容冲突。"));
         }
         if dataset.immutable {
             return Err(invalid_backup("便携备份中的不可变学习记录发生冲突。"));
@@ -1911,7 +2038,7 @@ fn normalize_record(
     Ok(true)
 }
 
-fn apply_resets(transaction: &rusqlite::Transaction<'_>) -> Result<(), PlatformError> {
+fn apply_resets(transaction: &rusqlite::Transaction<'_>) -> Result<bool, PlatformError> {
     let global: Option<String> = transaction
         .query_row(
             "SELECT reset_at FROM study_progress_state WHERE state_id='global'",
@@ -1921,16 +2048,20 @@ fn apply_resets(transaction: &rusqlite::Transaction<'_>) -> Result<(), PlatformE
         .optional()
         .map_err(|_| PlatformError::database_corrupt())?
         .flatten();
-    if let Some(reset) = global {
+    let has_global = global.is_some();
+    if let Some(reset) = global.as_deref() {
         for (table, time) in [
             ("review_events", "reviewed_at"),
             ("reinforcement_events", "created_at"),
             ("review_cards", "updated_at"),
         ] {
             transaction
-                .execute(&format!("DELETE FROM {table} WHERE {time}<=?1"), [&reset])
+                .execute(&format!("DELETE FROM {table} WHERE {time}<=?1"), [reset])
                 .map_err(|_| PlatformError::storage_unavailable())?;
         }
+        transaction
+            .execute("DELETE FROM study_sessions WHERE updated_at<=?1", [reset])
+            .map_err(|_| PlatformError::storage_unavailable())?;
     }
     let mut statement = transaction
         .prepare("SELECT lexeme_key,reset_at FROM study_lexeme_resets")
@@ -1943,6 +2074,7 @@ fn apply_resets(transaction: &rusqlite::Transaction<'_>) -> Result<(), PlatformE
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| PlatformError::database_corrupt())?;
     drop(statement);
+    let has_selective = !rows.is_empty();
     for (lexeme, reset) in rows {
         for (table, time) in [
             ("review_events", "reviewed_at"),
@@ -1957,7 +2089,32 @@ fn apply_resets(transaction: &rusqlite::Transaction<'_>) -> Result<(), PlatformE
                 )
                 .map_err(|_| PlatformError::storage_unavailable())?;
         }
+        transaction
+            .execute(
+                "DELETE FROM study_session_items WHERE lexeme_key=?1 AND updated_at<=?2",
+                [&lexeme, &reset],
+            )
+            .map_err(|_| PlatformError::storage_unavailable())?;
     }
+    Ok(has_global || has_selective)
+}
+
+fn reconcile_transient_study_state(
+    transaction: &rusqlite::Transaction<'_>,
+) -> Result<(), PlatformError> {
+    transaction
+        .execute(
+            "DELETE FROM study_session_items WHERE status IN ('pending','revealed') AND plan_id IN (SELECT plan_id FROM study_plans WHERE deleted_at IS NOT NULL)",
+            [],
+        )
+        .map_err(|_| PlatformError::storage_unavailable())?;
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    transaction
+        .execute(
+            "UPDATE study_sessions SET status='completed',completed_at=COALESCE(completed_at,?1),updated_at=?1 WHERE status='active' AND NOT EXISTS(SELECT 1 FROM study_session_items WHERE study_session_items.session_id=study_sessions.session_id AND status IN ('pending','revealed'))",
+            [&now],
+        )
+        .map_err(|_| PlatformError::storage_unavailable())?;
     Ok(())
 }
 
@@ -2123,6 +2280,7 @@ fn json_name<'a>(dataset: &'a Dataset, sql: &str) -> &'a str {
 }
 fn set_manifest_count(counts: &mut ManifestCounts, table: &str, count: usize) {
     match table {
+        "reader_records" => counts.reader_records = Some(count),
         "settings" => counts.settings = count,
         "reading_positions" => counts.reading_positions = count,
         "user_lexemes" => counts.vocabulary = count,
@@ -2138,6 +2296,7 @@ fn set_manifest_count(counts: &mut ManifestCounts, table: &str, count: usize) {
 }
 fn manifest_count_for(counts: &ManifestCounts, table: &str) -> Option<usize> {
     match table {
+        "reader_records" => counts.reader_records,
         "settings" => Some(counts.settings),
         "reading_positions" => Some(counts.reading_positions),
         "user_lexemes" => Some(counts.vocabulary),
@@ -2173,16 +2332,36 @@ mod tests {
     use crate::mobile_reading::{self, ParsedPublicationPlan};
 
     #[test]
-    fn format_v2_dataset_paths_are_unique_and_complete() {
+    fn format_v4_dataset_paths_are_unique_and_complete() {
         let paths = DATASETS
             .iter()
             .map(|item| item.path)
             .collect::<HashSet<_>>();
-        assert_eq!(paths.len(), 18);
+        assert_eq!(paths.len(), 19);
         assert!(paths.contains("data/publication-lifecycle.ndjson"));
         assert!(paths.contains("data/study-lexeme-resets.ndjson"));
-        assert_eq!(FORMAT_VERSION, 2);
+        assert_eq!(FORMAT_VERSION, 4);
         assert_eq!(CONTENT_ID_VERSION, 2);
+    }
+
+    #[test]
+    fn rejects_path_unsafe_publication_lifecycle_ids() {
+        let dataset = DATASETS
+            .iter()
+            .find(|dataset| dataset.table == "publication_lifecycle")
+            .expect("lifecycle dataset");
+        let Value::Object(record) = serde_json::json!({
+            "publicationId": "../../outside",
+            "contentHash": "a".repeat(64),
+            "formatId": "epub",
+            "titleSnapshot": "Unsafe",
+            "state": "deleted",
+            "changedAt": "2026-07-31T00:00:00.000Z",
+            "deviceId": "unsafe-device"
+        }) else {
+            unreachable!()
+        };
+        assert!(validate_record(dataset, &record).is_err());
     }
 
     #[test]
@@ -2201,7 +2380,7 @@ mod tests {
         assert_ne!(manifest.format, FORMAT);
         assert_ne!(manifest.format_version, FORMAT_VERSION);
         manifest.format = FORMAT.into();
-        manifest.format_version = 3;
+        manifest.format_version = 99;
         assert_ne!(manifest.format_version, FORMAT_VERSION);
     }
 
@@ -2219,9 +2398,16 @@ mod tests {
         let batch_id = "22222222-2222-4222-8222-222222222222";
         let payload_sha256 = "a".repeat(64);
 
-        let applied =
-            sync_apply_incoming_records(&mut database, &[], sender, batch_id, &payload_sha256, 42)
-                .expect("first sync commit");
+        let applied = sync_apply_incoming_records(
+            &mut database,
+            &[],
+            sender,
+            batch_id,
+            &payload_sha256,
+            42,
+            3,
+        )
+        .expect("first sync commit");
         assert!(!applied.duplicate);
 
         let peer_state = database
@@ -2235,10 +2421,134 @@ mod tests {
         assert_eq!(peer_state.0, 42);
         assert!(peer_state.1.is_some_and(|value| !value.is_empty()));
 
-        let duplicate =
-            sync_apply_incoming_records(&mut database, &[], sender, batch_id, &payload_sha256, 42)
-                .expect("duplicate sync commit");
+        let duplicate = sync_apply_incoming_records(
+            &mut database,
+            &[],
+            sender,
+            batch_id,
+            &payload_sha256,
+            42,
+            3,
+        )
+        .expect("duplicate sync commit");
         assert!(duplicate.duplicate);
+    }
+
+    #[test]
+    fn sync_plan_deletion_retires_receiver_local_queue_items() {
+        let root = tempfile::tempdir().expect("root");
+        let paths = PlatformPaths::new(
+            root.path().join("data"),
+            root.path().join("cache"),
+            root.path().join("logs"),
+        );
+        paths.prepare().expect("paths");
+        let mut database = AndroidDatabase::open(&paths, "receiver").expect("database");
+        let receiver = database.device_id().to_owned();
+        database.connection().execute_batch(&format!(
+            "INSERT INTO user_lexemes(lexeme_key,lemma_snapshot,phonetic_snapshot,brief_meanings_json,sense_groups_json,bnc_rank,frequency_rank,manual_state,manual_familiarity,created_at,updated_at,device_id,snapshot_provider,snapshot_quality) VALUES('lex_en_000000000000000000000001','queue',NULL,'[\"queue\"]','[]',1,1,'unrated',NULL,'2026-07-31T08:00:00.000Z','2026-07-31T08:00:00.000Z','{receiver}','ecdict',10);
+             INSERT INTO study_plans(plan_id,name,status,daily_new_limit,daily_review_limit,new_order,created_at,updated_at,device_id,deleted_at) VALUES('plan_sync_delete','Delete through sync','active',20,100,'deterministic_random','2026-07-31T08:00:00.000Z','2026-07-31T08:00:00.000Z','{receiver}',NULL);
+             INSERT INTO study_sessions(session_id,day_sequence,logical_date,timezone,cutoff_hour,next_rollover_at,status,extra_batch_count,opened_at,completed_at,updated_at,device_id,debug_forced) VALUES('session_sync_delete',1,'2026-07-31','UTC',4,'2026-08-01T04:00:00.000Z','active',0,'2026-07-31T09:00:00.000Z',NULL,'2026-07-31T09:00:00.000Z','{receiver}',0);
+             INSERT INTO study_session_batches(batch_id,session_id,plan_id,kind,new_limit,review_limit,created_at) VALUES('batch_sync_delete','session_sync_delete','plan_sync_delete','regular',20,100,'2026-07-31T09:00:00.000Z');
+             INSERT INTO study_session_items(item_id,session_id,batch_id,lexeme_key,plan_id,kind,queue_position,status,had_failure,consecutive_known,attempt_count,version,carried_from_item_id,created_at,updated_at,proposed_answer,fsrs_committed) VALUES('item_sync_delete','session_sync_delete','batch_sync_delete','lex_en_000000000000000000000001','plan_sync_delete','new',1,'pending',0,0,0,1,NULL,'2026-07-31T09:00:00.000Z','2026-07-31T09:00:00.000Z',NULL,0);"
+        )).expect("receiver queue fixture");
+
+        let Value::Object(plan) = serde_json::json!({
+            "planId": "plan_sync_delete",
+            "name": "Delete through sync",
+            "status": "archived",
+            "dailyNewLimit": 20,
+            "dailyReviewLimit": 100,
+            "newOrder": "deterministic_random",
+            "createdAt": "2026-07-31T08:00:00.000Z",
+            "updatedAt": "2026-07-31T10:00:00.000Z",
+            "deviceId": "11111111-1111-4111-8111-111111111111",
+            "deletedAt": "2026-07-31T10:00:00.000Z"
+        }) else {
+            unreachable!()
+        };
+        sync_apply_incoming_records(
+            &mut database,
+            &[SyncRawRecord {
+                table: "study_plans".into(),
+                record: plan,
+            }],
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            &"b".repeat(64),
+            7,
+            3,
+        )
+        .expect("apply plan tombstone");
+
+        let pending: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM study_session_items WHERE status IN ('pending','revealed')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("pending queue count");
+        let status: String = database
+            .connection()
+            .query_row(
+                "SELECT status FROM study_sessions WHERE session_id='session_sync_delete'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("session status");
+        assert_eq!(pending, 0);
+        assert_eq!(status, "completed");
+    }
+
+    #[test]
+    fn sync_global_reset_without_selective_tombstones_clears_old_local_progress() {
+        let root = tempfile::tempdir().expect("root");
+        let paths = PlatformPaths::new(
+            root.path().join("data"),
+            root.path().join("cache"),
+            root.path().join("logs"),
+        );
+        paths.prepare().expect("paths");
+        let mut database = AndroidDatabase::open(&paths, "receiver").expect("database");
+        let receiver = database.device_id().to_owned();
+        database.connection().execute_batch(&format!(
+            "INSERT INTO user_lexemes(lexeme_key,lemma_snapshot,phonetic_snapshot,brief_meanings_json,sense_groups_json,bnc_rank,frequency_rank,manual_state,manual_familiarity,created_at,updated_at,device_id,snapshot_provider,snapshot_quality) VALUES('lex_en_000000000000000000000002','reset',NULL,'[\"reset\"]','[]',1,1,'unrated',NULL,'2026-07-31T08:00:00.000Z','2026-07-31T08:00:00.000Z','{receiver}','ecdict',10);
+             INSERT INTO review_cards(lexeme_key,due_at,stability,difficulty,elapsed_days,scheduled_days,learning_steps,reps,lapses,state,last_review_at,updated_at,device_id) VALUES('lex_en_000000000000000000000002','2026-08-01T09:00:00.000Z',1.0,5.0,0,1,0,1,0,1,'2026-07-31T09:00:00.000Z','2026-07-31T09:00:00.000Z','{receiver}');
+             INSERT INTO study_sessions(session_id,day_sequence,logical_date,timezone,cutoff_hour,next_rollover_at,status,extra_batch_count,opened_at,completed_at,updated_at,device_id,debug_forced) VALUES('session_sync_reset',1,'2026-07-31','UTC',4,'2026-08-01T04:00:00.000Z','completed',0,'2026-07-31T09:00:00.000Z','2026-07-31T09:00:00.000Z','2026-07-31T09:00:00.000Z','{receiver}',0);"
+        )).expect("receiver progress fixture");
+
+        let Value::Object(reset) = serde_json::json!({
+            "stateId": "global",
+            "resetAt": "2026-07-31T10:00:00.000Z",
+            "updatedAt": "2026-07-31T10:00:00.000Z",
+            "deviceId": "11111111-1111-4111-8111-111111111111"
+        }) else {
+            unreachable!()
+        };
+        sync_apply_incoming_records(
+            &mut database,
+            &[SyncRawRecord {
+                table: "study_progress_state".into(),
+                record: reset,
+            }],
+            "11111111-1111-4111-8111-111111111111",
+            "33333333-3333-4333-8333-333333333333",
+            &"c".repeat(64),
+            9,
+            3,
+        )
+        .expect("apply global reset");
+
+        for table in ["review_cards", "study_sessions"] {
+            let count: i64 = database
+                .connection()
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("post-reset count");
+            assert_eq!(count, 0, "{table} should be cleared");
+        }
     }
 
     #[test]

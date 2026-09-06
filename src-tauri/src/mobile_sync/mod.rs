@@ -32,14 +32,14 @@ pub use apply::{acknowledge_transfer, apply_transfer};
 pub use model::{
     IncomingSyncPreviewPlan, LogicalRecord, PreparedMobileTransfer, PublicationPackageBlobRef,
     ResumableMobileTransferSummary, SyncApplyResult, SyncBatch, SyncEntityRef, SyncPeerSummary,
-    BATCH_MEDIA_TYPE, MAX_BATCH_BYTES, MAX_NDJSON_LINE_BYTES, SYNC_MODEL_VERSION,
-    SYNC_WIRE_VERSION,
+    BATCH_MEDIA_TYPE, MAX_BATCH_BYTES, MAX_NDJSON_LINE_BYTES, PREVIOUS_SYNC_MODEL_VERSION,
+    SYNC_MODEL_VERSION, SYNC_WIRE_VERSION,
 };
 pub use payload::{read_batch_payload, write_batch_payload};
 pub use persistence::{resumable_transfer_summaries, resumable_transfers};
 pub use prepare::{
     cleanup_prepared, create_peer_summary, duplicate_receipt_result, expanded_blob_bytes,
-    peer_inspected_revision, prepare_transfer, preview_incoming_batch,
+    peer_inspected_revision, prepare_transfer, preview_incoming_batch, preview_record_page,
 };
 pub use projection::{stable_payload_sha256, validate_batch};
 

@@ -482,11 +482,13 @@ pub fn translate_article(
     request_id: &str,
     key: &str,
     preferences: &TranslationPreferences,
+    force: bool,
 ) -> Result<TranslationResult, PlatformError> {
     let (provider, model) = resolve(preferences)?;
     let cache_model = cache_model(preferences)?;
     let (title, section_title, all, missing) = {
         let database = state.database()?;
+        crate::reader_records::preserve(&database, article_id)?;
         let (title, section_title) = database.connection().query_row(
             "SELECT a.title,s.title FROM articles a LEFT JOIN sections s ON s.id=a.section_id WHERE a.id=?1", [article_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
@@ -513,7 +515,7 @@ pub fn translate_article(
                 "SELECT EXISTS(SELECT 1 FROM translations WHERE block_id=?1 AND source_hash=?2 AND target_language='zh-CN' AND model=?3 AND prompt_version=?4)",
                 params![segment.id, segment.source_hash, cache_model, TRANSLATION_PROMPT_VERSION], |row| row.get(0),
             ).map_err(|_| PlatformError::database_corrupt())?;
-            if !found {
+            if force || !found {
                 missing.push(segment.clone());
             }
         }
@@ -622,6 +624,10 @@ pub fn translate_article(
                 true,
             ));
         }
+    }
+    {
+        let database = state.database()?;
+        crate::reader_records::preserve(&database, article_id)?;
     }
     emit_progress(app, article_id, completed, all.len(), "completed", None);
     Ok(TranslationResult {

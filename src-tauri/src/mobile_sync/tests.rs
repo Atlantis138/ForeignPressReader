@@ -34,6 +34,7 @@ fn matches_the_shared_sync_model_v2_payload_vector() {
         serde_json::from_str(include_str!("../../../test-vectors/sync-model-v2.json"))
             .expect("sync model vector");
     let batch: SyncBatch = serde_json::from_value(vector["batch"].clone()).expect("sync batch");
+    validate_batch(&batch, &batch.recipient_device_id).expect("valid v2 batch");
     assert_eq!(
         stable_payload_sha256(&batch).expect("payload hash"),
         vector["expectedStablePayloadSha256"].as_str().unwrap()
@@ -41,10 +42,98 @@ fn matches_the_shared_sync_model_v2_payload_vector() {
 }
 
 #[test]
-fn matches_the_shared_wire_v2_ndjson_vector() {
+fn matches_and_validates_the_shared_sync_model_v3_payload_vector() {
     let vector: Value =
-        serde_json::from_str(include_str!("../../../test-vectors/lan-sync-wire-v2.json"))
-            .expect("wire vector");
+        serde_json::from_str(include_str!("../../../test-vectors/sync-model-v3.json"))
+            .expect("sync model vector");
+    let batch: SyncBatch = serde_json::from_value(vector["batch"].clone()).expect("sync batch");
+    validate_batch(&batch, &batch.recipient_device_id).expect("valid v3 batch");
+    assert_eq!(
+        stable_payload_sha256(&batch).expect("payload hash"),
+        vector["expectedStablePayloadSha256"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn present_publication_selection_restores_its_cascaded_reading_position() {
+    let publication_id = "pub_aaaaaaaaaaaaaaaaaaaaaaaa";
+    let records = vec![
+        LogicalRecord {
+            entity_type: "publication-lifecycle".into(),
+            key: publication_id.into(),
+            revision: 1,
+            value: serde_json::json!({
+                "publicationId": publication_id,
+                "contentHash": "a".repeat(64),
+                "formatId": "epub",
+                "title": "Fixture",
+                "state": "present",
+                "changedAt": "2026-07-31T00:00:00.000Z",
+                "deviceId": "sender"
+            }),
+        },
+        LogicalRecord {
+            entity_type: "reading-position".into(),
+            key: publication_id.into(),
+            revision: 2,
+            value: serde_json::json!({ "publicationId": publication_id }),
+        },
+    ];
+    let mut selected = HashSet::from([identity("publication-lifecycle", publication_id)]);
+    prepare::expand_selected_dependencies(&records, &mut selected);
+    assert!(selected.contains(&identity("reading-position", publication_id)));
+}
+
+#[test]
+fn rejects_invalid_revision_ranges_and_package_descriptors() {
+    let vector: Value =
+        serde_json::from_str(include_str!("../../../test-vectors/sync-model-v2.json"))
+            .expect("sync model vector");
+    let mut original: SyncBatch =
+        serde_json::from_value(vector["batch"].clone()).expect("sync batch");
+    original.batch_id = "22222222-2222-4222-8222-222222222222".into();
+
+    let mut invalid_range = original.clone();
+    invalid_range.mode = "incremental".into();
+    invalid_range.from_sender_revision_exclusive = None;
+    invalid_range.inspected_peer_revision = None;
+    assert!(validate_batch(&invalid_range, &invalid_range.recipient_device_id).is_err());
+
+    let mut invalid_package = original;
+    invalid_package.blobs[0].media_type = "application/zip".into();
+    assert!(validate_batch(&invalid_package, &invalid_package.recipient_device_id).is_err());
+
+    let mut invalid_revision: SyncBatch =
+        serde_json::from_value(vector["batch"].clone()).expect("sync batch");
+    invalid_revision.batch_id = "22222222-2222-4222-8222-222222222222".into();
+    invalid_revision.records[0].revision = invalid_revision.sender_revision + 1;
+    assert!(validate_batch(&invalid_revision, &invalid_revision.recipient_device_id).is_err());
+
+    let mut invalid_format: SyncBatch =
+        serde_json::from_value(vector["batch"].clone()).expect("sync batch");
+    invalid_format.batch_id = "22222222-2222-4222-8222-222222222222".into();
+    invalid_format.blobs[0].format_id = "../epub".into();
+    assert!(validate_batch(&invalid_format, &invalid_format.recipient_device_id).is_err());
+
+    let mut unsafe_publication: SyncBatch =
+        serde_json::from_value(vector["batch"].clone()).expect("sync batch");
+    unsafe_publication.batch_id = "22222222-2222-4222-8222-222222222222".into();
+    let lifecycle = unsafe_publication
+        .records
+        .iter_mut()
+        .find(|record| record.entity_type == "publication-lifecycle")
+        .expect("lifecycle");
+    lifecycle.key = "../../outside".into();
+    lifecycle.value["publicationId"] = Value::String("../../outside".into());
+    assert!(validate_batch(&unsafe_publication, &unsafe_publication.recipient_device_id).is_err());
+}
+
+#[test]
+fn matches_the_shared_wire_v2_ndjson_vector() {
+    let vector: Value = serde_json::from_str(include_str!(
+        "../../../test-vectors/lan-sync-wire-v2-model-v4.json"
+    ))
+    .expect("wire vector");
     let batch: SyncBatch = serde_json::from_value(vector["batch"].clone()).expect("wire batch");
     let directory = tempfile::tempdir().expect("temporary directory");
     let path = directory.path().join("batch.ndjson");
@@ -57,9 +146,10 @@ fn matches_the_shared_wire_v2_ndjson_vector() {
 
 #[test]
 fn wire_v2_ndjson_rejects_count_mismatch_and_oversized_line() {
-    let vector: Value =
-        serde_json::from_str(include_str!("../../../test-vectors/lan-sync-wire-v2.json"))
-            .expect("wire vector");
+    let vector: Value = serde_json::from_str(include_str!(
+        "../../../test-vectors/lan-sync-wire-v2-model-v4.json"
+    ))
+    .expect("wire vector");
     let mut batch: SyncBatch = serde_json::from_value(vector["batch"].clone()).expect("wire batch");
     let directory = tempfile::tempdir().expect("temporary directory");
     let mismatch = directory.path().join("mismatch.ndjson");

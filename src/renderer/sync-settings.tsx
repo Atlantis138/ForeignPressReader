@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { SyncApi, SyncDeviceSummary, SyncPageState } from '../shared/types'
+import { SyncChangeDetails } from './sync-change-details'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { SyncApi, SyncCompletedResult, SyncDeviceSummary, SyncPageState } from '../shared/types'
 
 const EMPTY_STATE: SyncPageState = {
   active: false,
@@ -67,13 +68,16 @@ function localizeDiscoveryDiagnostic(diagnostic: string): string {
   return '局域网设备发现暂时不可用。'
 }
 
-export function SyncSettingsPanel({ api, onError, compact = false }: {
+export function SyncSettingsPanel({ api, onError, onDataChanged, compact = false }: {
   api: SyncApi
   onError(message: string): void
+  onDataChanged?(): void | Promise<void>
   compact?: boolean
 }) {
   const [state, setState] = useState<SyncPageState>(EMPTY_STATE)
   const [busy, setBusy] = useState<string | null>('open')
+  const pageOpened = useRef(false)
+  const observedCompletion = useRef<string | null>(null)
   const refresh = useCallback(async () => setState(await api.refreshDiscovery()), [api])
   useEffect(() => {
     let disposed = false
@@ -93,6 +97,8 @@ export function SyncSettingsPanel({ api, onError, compact = false }: {
           await api.closePage()
           return
         }
+        observedCompletion.current = syncCompletionIdentity(next.lastCompleted)
+        pageOpened.current = true
         setState(next)
         setBusy(null)
         timer = setInterval(() => {
@@ -137,6 +143,15 @@ export function SyncSettingsPanel({ api, onError, compact = false }: {
     }
   }, [api, onError])
 
+  useEffect(() => {
+    if (!pageOpened.current) return
+    const identity = syncCompletionIdentity(state.lastCompleted)
+    if (!identity || identity === observedCompletion.current) return
+    observedCompletion.current = identity
+    if (state.lastCompleted?.direction !== 'receiving' || !onDataChanged) return
+    void Promise.resolve(onDataChanged()).catch((reason) => onError(messageOf(reason)))
+  }, [onDataChanged, onError, state.lastCompleted])
+
   const run = async (id: string, action: () => Promise<SyncPageState>) => {
     setBusy(id)
     try { setState(await action()) }
@@ -176,6 +191,7 @@ export function SyncSettingsPanel({ api, onError, compact = false }: {
         <div><dt>缺失内容包</dt><dd>{state.incoming.missingBlobs}</dd></div>
       </dl>
       <p>接收后，发送端本批次中同 ID 的当前状态会覆盖本机；本机独有记录仍保留，只有显式删除墓碑才会删除刊物。</p>
+      <SyncChangeDetails key={state.incoming.transferId} api={api} transferId={state.incoming.transferId} />
       <div className="sync-actions"><button className="primary-button" disabled={busy !== null} onClick={() => void run('incoming-accept', () => api.acceptIncoming(state.incoming!.transferId))}>接受并应用</button><button className="secondary-button" disabled={busy !== null} onClick={() => void run('incoming-reject', () => api.rejectIncoming(state.incoming!.transferId))}>拒绝</button></div>
     </section>}
 
@@ -204,6 +220,18 @@ export function SyncSettingsPanel({ api, onError, compact = false }: {
       <div className="sync-device-list">{state.trustedDevices.map((peer) => <div className="sync-device-row" key={peer.deviceId}><DeviceIdentity peer={peer} /><div className="sync-actions">{peer.online && <button className="primary-button" disabled={busy !== null || operationActive} onClick={() => void run(`send-${peer.deviceId}`, () => api.sendTo(peer.deviceId))}>同步到此设备</button>}<button className="text-button" disabled={busy !== null || operationActive} onClick={() => void run(`revoke-${peer.deviceId}`, () => api.revokeTrust(peer.deviceId))}>撤销信任</button></div></div>)}</div>
     </section>}
   </div>
+}
+
+export function syncCompletionIdentity(result: SyncCompletedResult | null): string | null {
+  if (!result) return null
+  return [
+    result.direction,
+    result.peerName,
+    result.completedAt,
+    result.appliedRecords,
+    result.unchangedRecords,
+    result.importedPublications,
+  ].join('\u001f')
 }
 
 function DeviceRow({ peer, trusted, disabled, onPair, onSend }: {

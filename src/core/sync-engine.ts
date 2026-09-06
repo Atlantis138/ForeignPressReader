@@ -3,10 +3,10 @@ import {
   type LogicalRecordV1,
   type PublicationPackageBlobRefV2,
   type SyncBatchMode,
-  type SyncBatchV2,
+  type SyncBatchV4,
   type SyncEntityRef,
   type SyncEntityType,
-  type SyncPeerSummaryV2,
+  type SyncPeerSummaryV4,
 } from './sync-model'
 
 export interface PlanSyncSelectionInput {
@@ -16,7 +16,7 @@ export interface PlanSyncSelectionInput {
   /** Local change-index entries. They may include physically absent rows. */
   localChanges: readonly SyncEntityRef[]
   /** Null means this is the first exchange with the peer. */
-  peer: SyncPeerSummaryV2 | null
+  peer: SyncPeerSummaryV4 | null
 }
 
 export interface SyncSelectionPlan {
@@ -124,7 +124,7 @@ export function sortLogicalRecordsForApply(records: readonly LogicalRecordV1[]):
 }
 
 /** Build transport-neutral batch metadata; callers provide IDs and timestamps. */
-export function buildSyncBatch(input: BuildSyncBatchInput): SyncBatchV2 {
+export function buildSyncBatch(input: BuildSyncBatchInput): SyncBatchV4 {
   return {
     modelVersion: SYNC_MODEL_VERSION,
     batchId: input.batchId,
@@ -164,6 +164,7 @@ function dependencyRank(record: LogicalRecordV1): number {
     case 'setting': return 5
     case 'user-lexeme': return 10
     case 'lexeme-example': return 12
+    case 'reader-record': return 16
     case 'reading-position': return 15
     case 'saved-context':
     case 'vocabulary-source': return 20

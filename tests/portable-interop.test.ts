@@ -22,7 +22,7 @@ afterEach(() => {
   }
 })
 
-interopTest('round-trips format v2 through Windows and Rust with rollback and idempotency', async () => {
+interopTest('round-trips format v4 through Windows and Rust with rollback and idempotency', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-portable-interop-'))
   roots.push(root)
   const sourceRoot = path.join(root, 'windows-source')
@@ -33,6 +33,12 @@ interopTest('round-trips format v2 through Windows and Rust with rollback and id
   const publication = await sourceLibrary.importFile(epubPath)
   const article = publication.publication.sections[0].articles[0]
   sourceDb.savePosition(publication.publication.id, article.id, 321)
+  sourceDb.changeReadingData(article.id,{kind:'bookmark',value:true})
+  sourceDb.changeReadingData(article.id,{kind:'read',value:true})
+  const translationBlock=sourceDb.getArticle(article.id).blocks.find(b=>b.type==='paragraph')!
+  sourceDb.saveTranslation(translationBlock.id,createHash('sha256').update(translationBlock.text!).digest('hex'),'跨平台保留译文','interop-model','interop-prompt')
+  const translationVersion=sourceDb.preserveTranslations(article.id)!
+  sourceDb.changeReadingData(article.id,{kind:'translation-selection',value:translationVersion})
 
   const vector = JSON.parse(fs.readFileSync(
     path.join(process.cwd(), 'test-vectors', 'portable-v2-interop.json'), 'utf8',

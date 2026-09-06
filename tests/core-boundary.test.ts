@@ -10,7 +10,7 @@ describe('portable core boundary', () => {
       build: { appId: string; productName: string; win: { artifactName: string } }
     }
     expect(packageJson.name).toBe('foreign-press-reader')
-    expect(packageJson.version).toBe('1.0.0')
+    expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)
     expect(packageJson.build.appId).toBe('com.local.foreignpressreader')
     expect(packageJson.build.productName).toBe('外刊阅读器')
     expect(packageJson.build.win.artifactName).toBe('ForeignPressReader-${version}-Setup.exe')

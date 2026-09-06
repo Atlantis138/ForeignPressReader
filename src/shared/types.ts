@@ -1,3 +1,4 @@
+import type { ReaderManagementApi } from './reader-types'
 export type BlockType =
   | 'title'
   | 'rubric'
@@ -99,6 +100,7 @@ export interface ArticleDetail extends ArticleSummary {
 }
 
 export interface ImportResult {
+  repaired?: boolean
   publication: PublicationDetail
   duplicate: boolean
 }
@@ -649,6 +651,7 @@ export interface PortableImportPreview {
   newPublicationCount: number
   duplicatePublicationCount: number
   settingCount: number
+  readerRecordCount?: number
   readingPositionCount: number
   vocabularyCount: number
   vocabularySourceCount: number
@@ -718,7 +721,7 @@ export interface LibraryApi {
   getPublication(id: string): Promise<PublicationDetail>
 }
 
-export interface ReaderApi {
+export interface ReaderApi extends ReaderManagementApi {
   getArticle(id: string): Promise<ArticleDetail>
   savePosition(publicationId: string, articleId: string, position: ReadingPositionInput): Promise<void>
   getPreferences(): Promise<ReaderPreferences>
@@ -736,7 +739,7 @@ export interface SpeechApi {
 }
 
 export interface TranslationApi {
-  translateArticle(articleId: string): Promise<TranslationResult>
+  translateArticle(articleId: string, force?: boolean): Promise<TranslationResult>
   cancel(articleId: string): Promise<void>
   onProgress(callback: (progress: TranslationProgress) => void): () => void
 }
@@ -911,7 +914,12 @@ export interface SyncPageState {
   diagnostic: string | null
 }
 
+export interface SyncChangePage {
+  total: number; offset: number; limit: number
+  items: { type: string; key: string; label?: string | null; action: 'new' | 'update' | 'delete' | 'unchanged'; before: string | null; after: string }[]
+}
 export interface SyncApi {
+  getIncomingChanges(transferId: string, offset: number, limit: number): Promise<SyncChangePage>
   openPage(): Promise<SyncPageState>
   closePage(): Promise<void>
   getState(): Promise<SyncPageState>

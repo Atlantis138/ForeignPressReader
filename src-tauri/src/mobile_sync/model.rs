@@ -1,6 +1,7 @@
 use super::*;
 
-pub const SYNC_MODEL_VERSION: i64 = 2;
+pub const PREVIOUS_SYNC_MODEL_VERSION: i64 = 2;
+pub const SYNC_MODEL_VERSION: i64 = 4;
 pub const SYNC_WIRE_VERSION: i64 = 2;
 pub const MAX_BATCH_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_NDJSON_LINE_BYTES: usize = 1024 * 1024;

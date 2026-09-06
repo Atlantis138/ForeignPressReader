@@ -1,7 +1,10 @@
 export const LEGACY_SYNC_MODEL_VERSION = 1 as const
-export const SYNC_MODEL_VERSION = 2 as const
+export const PREVIOUS_SYNC_MODEL_VERSION = 2 as const
+export const SYNC_MODEL_VERSION = 4 as const
 
-export type SyncModelVersion = typeof LEGACY_SYNC_MODEL_VERSION | typeof SYNC_MODEL_VERSION
+export type SyncModelVersion = typeof LEGACY_SYNC_MODEL_VERSION
+  | typeof PREVIOUS_SYNC_MODEL_VERSION
+  | 3 | typeof SYNC_MODEL_VERSION
 export type MergePolicy = 'newer-wins' | 'incoming-wins'
 export type SyncBatchMode = 'snapshot' | 'incremental'
 
@@ -14,6 +17,7 @@ export interface JsonObject { [key: string]: JsonValue }
  * the cross-platform contract and deliberately do not mirror SQLite tables.
  */
 export type SyncEntityType =
+  | 'reader-record'
   | 'publication-lifecycle'
   | 'setting'
   | 'reading-position'
@@ -167,7 +171,10 @@ export interface LogicalRecordEnvelopeV1<
   value: TValue
 }
 
+export interface ReaderRecordValue extends JsonObject { recordId:string; publicationId:string; articleId:string; kind:string; payload:string; updatedAt:string; deviceId:string }
+
 export type LogicalRecordV1 =
+  | LogicalRecordEnvelopeV1<'reader-record', ReaderRecordValue>
   | LogicalRecordEnvelopeV1<'publication-lifecycle', PublicationLifecycleValueV1>
   | LogicalRecordEnvelopeV1<'setting', SettingValueV1>
   | LogicalRecordEnvelopeV1<'reading-position', ReadingPositionValueV1>
@@ -224,10 +231,15 @@ export interface SyncPeerSummaryV1 {
 }
 
 export interface SyncPeerSummaryV2 extends Omit<SyncPeerSummaryV1, 'modelVersion'> {
+  modelVersion: typeof PREVIOUS_SYNC_MODEL_VERSION
+}
+
+export interface SyncPeerSummaryV4 extends Omit<SyncPeerSummaryV1, 'modelVersion'> {
   modelVersion: typeof SYNC_MODEL_VERSION
 }
 
-export type SyncPeerSummary = SyncPeerSummaryV1 | SyncPeerSummaryV2
+export interface SyncPeerSummaryV3 extends Omit<SyncPeerSummaryV2, 'modelVersion'> { modelVersion: 3 }
+export type SyncPeerSummary = SyncPeerSummaryV1 | SyncPeerSummaryV2 | SyncPeerSummaryV3 | SyncPeerSummaryV4
 
 export interface SyncBatchV1 {
   modelVersion: typeof LEGACY_SYNC_MODEL_VERSION
@@ -246,11 +258,16 @@ export interface SyncBatchV1 {
 }
 
 export interface SyncBatchV2 extends Omit<SyncBatchV1, 'modelVersion' | 'blobs'> {
-  modelVersion: typeof SYNC_MODEL_VERSION
+  modelVersion: typeof PREVIOUS_SYNC_MODEL_VERSION
   blobs: PublicationPackageBlobRefV2[]
 }
 
-export type SyncBatch = SyncBatchV1 | SyncBatchV2
+export interface SyncBatchV4 extends Omit<SyncBatchV2, 'modelVersion'> {
+  modelVersion: typeof SYNC_MODEL_VERSION
+}
+
+export interface SyncBatchV3 extends Omit<SyncBatchV2, 'modelVersion'> { modelVersion: 3 }
+export type SyncBatch = SyncBatchV1 | SyncBatchV2 | SyncBatchV3 | SyncBatchV4
 
 export interface SyncApplyResult {
   batchId: string

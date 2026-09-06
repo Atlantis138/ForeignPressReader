@@ -32,6 +32,12 @@ afterEach(() => {
 })
 
 describe('formal-v1 cross-platform vector', () => {
+  it('pins v4 independently of the earlier formal schemas', () => {
+    const vector = JSON.parse(fs.readFileSync('test-vectors/formal-v4.json','utf8'))
+    const connection = new DatabaseSync(':memory:')
+    try { for (const migration of MIGRATIONS) migration.up(connection); expect(schemaFingerprint(connection)).toBe(vector.schemaFingerprint) }
+    finally { connection.close() }
+  })
   it('pins the published Electron schema and logical helpers', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'formal-v1-vector-'))
     roots.push(root)
@@ -59,19 +65,31 @@ describe('formal-v1 cross-platform vector', () => {
   })
 
   it('pins the additive v2 schema without rewriting the v1 vector', async () => {
-    const latest = JSON.parse(fs.readFileSync(
+    const v2 = JSON.parse(fs.readFileSync(
       path.join(process.cwd(), 'test-vectors', 'formal-v2.json'),
       'utf8',
     )) as FormalV1Vector
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'formal-v2-vector-'))
     roots.push(root)
-    const repository = await SqliteApplicationRepository.open(root, 'vector-test')
+    const database = new DatabaseSync(path.join(root, 'formal-v2.sqlite'))
     try {
-      expect(repository.getSchemaStatus().schemaVersion).toBe(latest.schemaVersion)
-      expect(schemaFingerprint(repository.getConnection())).toBe(latest.schemaFingerprint)
+      MIGRATIONS[0].up(database)
+      MIGRATIONS[1].up(database)
+      database.exec(`PRAGMA user_version=${v2.schemaVersion}`)
+      expect(schemaFingerprint(database)).toBe(v2.schemaFingerprint)
     } finally {
-      repository.close()
+      database.close()
     }
+  })
+
+  it('pins the additive v3 schema without rewriting earlier vectors', async () => {
+    const latest = JSON.parse(fs.readFileSync(
+      path.join(process.cwd(), 'test-vectors', 'formal-v3.json'),
+      'utf8',
+    )) as FormalV1Vector
+    const connection = new DatabaseSync(':memory:')
+    try { for (const migration of MIGRATIONS.slice(0,3)) migration.up(connection); expect(schemaFingerprint(connection)).toBe(latest.schemaFingerprint) }
+    finally { connection.close() }
   })
 })
 

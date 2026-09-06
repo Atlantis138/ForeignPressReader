@@ -1,5 +1,7 @@
 # 外刊阅读器 Tauri Android 移植路线
 
+> 2026-09 后续实现：文章阅读记录、译文版本、增量投影、解析补全、启动恢复与 Android 原生媒体服务已追加到当前源码，详见 [v4 契约](reader-data-v4.md) 和 [修复记录](project-repair-2026-09.md)。旧阶段状态保留作为历史记录。
+
 > 文档状态：正式迁移路线基线
 > 起点版本：`v1.0.0-alpha.1`（提交 `7142e40`）
 > 适用范围：Electron/Windows 正式应用、Tauri/Android 应用，以及远期 Tauri/iOS
@@ -55,8 +57,8 @@ Android 移植是独立于局域网同步的产品主线。阅读、查词、生
 | 网络 | `NetworkClient` 端口、供应商适配语义 | Rust/Android HTTP 实现；遵循系统/VPN 网络栈，不复用 Windows 代理发现 |
 | 密钥 | `ApiKeyStore` 端口和脱敏规则 | Android Keystore 或受审计的 Tauri 安全存储适配器 |
 | 语音 | 播放队列、供应商注册和缓存键 | 验证 WebView 音频；必要时增加 Kotlin 系统 TTS/音频插件 |
-| 备份 | 正式 format v2、规范化刊物包、校验和合并规则 | Android 文件创建/选择、原子写入、空间预检和恢复补偿 |
-| 同步 | Sync Model v2、revision、墓碑、规范化刊物包和 loopback 测试 | NSD、配对、HTTPS、证书、传输 staging、权限和前后台策略 |
+| 备份 | 正式 format v3、format v2 恢复映射、规范化刊物包、校验和合并规则 | Android 文件创建/选择、原子写入、空间预检和恢复补偿 |
+| 同步 | Sync Model v3、v2 兼容向量、revision、墓碑、规范化刊物包和 loopback 测试 | NSD、配对、HTTPS、证书、传输 staging、权限和前后台策略 |
 
 ## 4. 实施原则
 
@@ -221,13 +223,13 @@ D1 将用户明确要求的“搜索查词”作为受控范围扩展：只提�
 
 阶段 F 当时尚未配置稳定 release keystore，因此只以永久 `.dev` 身份和稳定 debug 签名验证升级语义，并验证缺少 release 签名时构建必然失败；仓库外稳定签名实装由后续 v1.0 正式发布门禁完成。恶意备份、失败回滚和幂等矩阵由 Rust/TypeScript 自动化承担，不在设备上重复制造每种破坏向量。
 
-`formal-v1` migration 1、便携备份 format v1、Sync Model v1 和内容 ID v2 仍是不可改写基线；当前已通过 migration 2、便携 format v2 与 Sync Model v2 新增演进。产品不导入便携 v1，Sync v1 仅保留内部接收映射。
+`formal-v1` migration 1、便携备份 format v1、Sync Model v1 和内容 ID v2 仍是不可改写基线；当前已通过顺序 migration 2/3、便携 format v2/v3 与 Sync Model v2/v3 新增演进。产品不导入便携 v1，可把 format v2 与 Sync Model v2 映射到当前模型，Sync v1 仅保留内部接收映射。
 
 退出条件：数据与存储、开发与调试及同步占位入口完成对齐，冗余兼容路径完成审计，预发布 Alpha 在华为 API 31 与模拟器 API 35 通过基础安装、覆盖升级、离线和数据保留回归。
 
 ### 阶段 G：局域网同步（实现完成，真实设备端到端验收待执行）
 
-目标：在两个本地应用都稳定后，为现有 Sync Model v2 增加真实传输层。
+目标：在两个本地应用都稳定后，为版本化 Sync Model 增加真实传输层；传输层最初承载 v2，当前发送模型为 v3。
 
 交付与协议细节以[未来同步功能开发路线](future-sync-roadmap.md)为准。借鉴 LocalSend 的发现降级、准备/确认、证书指纹、进度、取消和诊断体验，但不复制其临时文件传输协议，也不让同步传输重新定义阅读/学习数据语义。
 
@@ -236,7 +238,8 @@ D1 将用户明确要求的“搜索查词”作为受控范围扩展：只提�
 - Windows/Electron 使用主进程 DNS-SD 与 HTTPS 服务；Android/Tauri 使用 Kotlin `NsdManager`、页作用域 multicast lock、Rust HTTPS 服务和 Keystore 身份。双方只有进入同步页时才发现和监听。
 - 首次配对使用被发现证书固定 HTTPS、相同六位码和双端确认；成功后保存对端设备 ID、证书指纹与对称信任令牌，可在设置中撤销。
 - 发送端读取接收端摘要后生成 snapshot/incremental 批次；接收端按实际本机状态预览新增刊物、更新记录、删除刊物和缺失内容包，用户接受后才上传与原子应用。
-- 传输只包含 Sync Model v2 逻辑数据和缺失 `.fprpub`，不包含原始 EPUB、数据库、缓存、词典、API 密钥或身份私钥；批次回执支持安全重试，应用阶段不可取消。
+- 传输只包含当前 Sync Model v3 逻辑数据和缺失 `.fprpub`，不包含原始 EPUB、数据库、缓存、词典、API 密钥或身份私钥；批次回执支持安全重试，应用阶段不可取消。
+- v3 把分类、自定义刊名与归类关系改为独立记录和墓碑；接收计划删除/进度重置后会清理设备本地临时队列，接收完成或便携导入后 renderer 统一刷新数据敏感路由与设置。
 - TypeScript 类型/单元测试、Rust 编译与跨语言向量、Kotlin 编译、Windows x64 NSIS 和 Android ARM64 debug APK 已通过。按当前安排未执行真实 Windows ↔ Android 发现、配对、首传、增量、拒绝、断线与重试矩阵，故设备验收状态仍为待完成。
 
 进入条件已满足：阶段 F 完成；Android 本地功能不依赖网络；同步失败不会阻塞阅读、查词或复习。
@@ -266,7 +269,7 @@ iOS 开始前复核所有 Android 原生实现：Rust repository 和领域逻辑
 
 ## 7. 下一任务清单
 
-阶段 A–F 已完成，阶段 G 的局域网同步实现与构建门禁也已完成。下一项同步任务是执行真实 Windows ↔ Android 端到端矩阵并据结果补齐防火墙、AP isolation、权限拒绝和厂商网络栈诊断；按当前安排这项验证暂缓。parsed-only 刊物存储、migration 2、便携 format v2、Sync Model v2 与缓存隔离已纳入当前基线；稳定签名 release、全设备无障碍/音频附件矩阵仍在发布候选执行。
+阶段 A–F 已完成，阶段 G 的局域网同步实现与构建门禁也已完成。下一项同步任务是执行[真实 Windows ↔ Android 端到端矩阵](sync-validation.md)并据结果补齐防火墙、AP isolation、权限拒绝和厂商网络栈诊断。parsed-only 刊物存储、migration 3、便携 format v3、Sync Model v3、format/model v2 映射与缓存隔离已纳入当前基线；稳定签名 release、全设备无障碍/音频附件矩阵仍在发布候选执行。
 
 ## 8. 官方参考
 

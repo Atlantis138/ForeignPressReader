@@ -3,6 +3,7 @@ import type {
   ContextDefinition,
   DictionaryPreferences,
   ParsedPublication,
+  ParsedPublicationPlan,
   PublicationDetail,
   PublicationSummary,
   ReadingPositionInput,
@@ -19,6 +20,7 @@ export interface PublicationImporter {
 }
 
 export interface LibraryRepository {
+  repairPublication(plan: ParsedPublicationPlan): boolean
   findPublicationIdByHash(hash: string): string | null
   savePublication(publication: ParsedPublication, formatId?: string, firstImportedAt?: string): void
   listRetainedPublicationSources(): PublicationSourceCleanupCandidate[]
@@ -51,6 +53,7 @@ export interface ReaderStateRepository {
 }
 
 export interface TranslationRepository {
+  preserveTranslations?(articleId: string): string | null
   getArticle(id: string): ArticleDetail
   getTranslatableBlocks(articleId: string): Array<{ id: string; type: string; text: string; sourceHash: string }>
   hasTranslation(blockId: string, sourceHash: string, model: string, promptVersion: string): boolean

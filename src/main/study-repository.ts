@@ -1,244 +1,1758 @@
 import crypto from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type {
-  DictionaryLearningItem, StudyAnswerRequest, StudyDashboard, StudyDebugState, StudyDistribution,
-  StudyPlanDetail, StudyPlanInput, StudyPlanStatus, StudyPlanSummary, StudyPlanWordPage,
-  StudyPlanWordQuery, StudyPreferences, StudySessionState, StudySourceSyncStatus,
-  StudyStageAnswerRequest, StudyTodaySummary, StudyTodayWord, StudyTodayWordPage, StudyTodayWordQuery,
-  StudyTooEasyRequest, StudyDeletePlanOptions,
+  DictionaryLearningItem,
+  StudyAnswerRequest,
+  StudyDashboard,
+  StudyDebugState,
+  StudyDistribution,
+  StudyPlanDetail,
+  StudyPlanInput,
+  StudyPlanStatus,
+  StudyPlanSummary,
+  StudyPlanWordPage,
+  StudyPlanWordQuery,
+  StudyPreferences,
+  StudySessionState,
+  StudySourceSyncStatus,
+  StudyStageAnswerRequest,
+  StudyTodaySummary,
+  StudyTodayWord,
+  StudyTodayWordPage,
+  StudyTodayWordQuery,
+  StudyTooEasyRequest,
+  StudyDeletePlanOptions,
 } from '../shared/types'
-import { applyFsrs, retrievability, type StoredReviewCard } from '../core/study/fsrs-scheduler'
-import { mergeDailyPools, nextReinforcementState, reinforcementInsertionIndex, weightedNewScore } from '../core/study/queue'
+import {
+  applyFsrs,
+  retrievability,
+  type StoredReviewCard,
+} from '../core/study/fsrs-scheduler'
+import {
+  mergeDailyPools,
+  nextReinforcementState,
+  reinforcementInsertionIndex,
+  weightedNewScore,
+} from '../core/study/queue'
 import { studyMoment } from '../core/study/study-clock'
 import { stableIdentity, vocabularySourceIdentity } from './migrations'
 import type { StudyDatabase } from './database-ports'
 
 type Row = Record<string, unknown>
-const DEFAULT_PREFERENCES: StudyPreferences = { cutoffHour: 4, requestRetention: .9, maximumInterval: 36500, queueOrder: 'mixed' }
+const DEFAULT_PREFERENCES: StudyPreferences = {
+  cutoffHour: 4,
+  requestRetention: 0.9,
+  maximumInterval: 36500,
+  queueOrder: 'mixed',
+}
 const DEBUG_KEY = 'study.developer-mode'
 
 export class SqliteStudyRepository {
   private readonly db: DatabaseSync
   private readonly deviceId: string
-  constructor(private readonly database: StudyDatabase, private readonly now: () => Date = () => new Date()) {
-    this.db = database.getConnection(); this.deviceId = database.getDeviceId()
+  constructor(
+    private readonly database: StudyDatabase,
+    private readonly now: () => Date = () => new Date(),
+  ) {
+    this.db = database.getConnection()
+    this.deviceId = database.getDeviceId()
   }
 
-  currentLexemeForHydration(request:{sessionId:string;itemId:string;expectedVersion:number}):string {
-    const row=this.db.prepare("SELECT lexeme_key,version FROM study_session_items WHERE session_id=? AND item_id=? AND status IN ('pending','revealed')").get(request.sessionId,request.itemId) as Row|undefined
-    if(!row||Number(row.version)!==request.expectedVersion)throw new Error('学习队列已变化，请刷新后重试')
+  currentLexemeForHydration(request: {
+    sessionId: string
+    itemId: string
+    expectedVersion: number
+  }): string {
+    const row = this.db
+      .prepare(
+        "SELECT lexeme_key,version FROM study_session_items WHERE session_id=? AND item_id=? AND status IN ('pending','revealed')",
+      )
+      .get(request.sessionId, request.itemId) as Row | undefined
+    if (!row || Number(row.version) !== request.expectedVersion)
+      throw new Error('学习队列已变化，请刷新后重试')
     return String(row.lexeme_key)
   }
-  listLexemeExamples(key:string){return this.database.listLexemeExamples(key)}
-  saveLexemeExamples(key:string,examples:import('../shared/types').DictionaryExample[]){return this.database.saveLexemeExamples(key,examples)}
+  listLexemeExamples(key: string) {
+    return this.database.listLexemeExamples(key)
+  }
+  saveLexemeExamples(
+    key: string,
+    examples: import('../shared/types').DictionaryExample[],
+  ) {
+    return this.database.saveLexemeExamples(key, examples)
+  }
 
   getPreferences(): StudyPreferences {
-    const row = this.db.prepare("SELECT value FROM settings WHERE key='study.preferences'").get() as Row | undefined
+    const row = this.db
+      .prepare("SELECT value FROM settings WHERE key='study.preferences'")
+      .get() as Row | undefined
     if (!row) return DEFAULT_PREFERENCES
-    try { return validatePreferences({ ...DEFAULT_PREFERENCES, ...JSON.parse(String(row.value)) }) } catch { return DEFAULT_PREFERENCES }
+    try {
+      return validatePreferences({
+        ...DEFAULT_PREFERENCES,
+        ...JSON.parse(String(row.value)),
+      })
+    } catch {
+      return DEFAULT_PREFERENCES
+    }
   }
   savePreferences(value: StudyPreferences): StudyPreferences {
-    const valid = validatePreferences(value), now = this.now().toISOString()
-    this.db.prepare(`INSERT INTO settings(key,value,updated_at,device_id) VALUES('study.preferences',?,?,?)
-      ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,device_id=excluded.device_id`)
+    const valid = validatePreferences(value),
+      now = this.now().toISOString()
+    this.db
+      .prepare(
+        `INSERT INTO settings(key,value,updated_at,device_id) VALUES('study.preferences',?,?,?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,device_id=excluded.device_id`,
+      )
       .run(JSON.stringify(valid), now, this.deviceId)
     return valid
   }
 
   getDebugState(): StudyDebugState {
-    const row = this.db.prepare('SELECT value FROM settings WHERE key=?').get(DEBUG_KEY) as Row | undefined
-    const progress = this.db.prepare("SELECT reset_at FROM study_progress_state WHERE state_id='global'").get() as Row | undefined
-    return { enabled: row ? String(row.value) === 'true' : false, lastResetAt: progress?.reset_at == null ? null : String(progress.reset_at) }
+    const row = this.db
+      .prepare('SELECT value FROM settings WHERE key=?')
+      .get(DEBUG_KEY) as Row | undefined
+    const progress = this.db
+      .prepare(
+        "SELECT reset_at FROM study_progress_state WHERE state_id='global'",
+      )
+      .get() as Row | undefined
+    return {
+      enabled: row ? String(row.value) === 'true' : false,
+      lastResetAt:
+        progress?.reset_at == null ? null : String(progress.reset_at),
+    }
   }
   setDeveloperMode(enabled: boolean): StudyDebugState {
-    this.db.prepare(`INSERT INTO settings(key,value,updated_at,device_id) VALUES(?,?,?,?)
-      ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,device_id=excluded.device_id`)
+    this.db
+      .prepare(
+        `INSERT INTO settings(key,value,updated_at,device_id) VALUES(?,?,?,?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,device_id=excluded.device_id`,
+      )
       .run(DEBUG_KEY, String(enabled), this.now().toISOString(), this.deviceId)
     return this.getDebugState()
   }
 
   listPlans(includeArchived = false): StudyPlanSummary[] {
-    const rows = this.db.prepare(`SELECT * FROM study_plans WHERE deleted_at IS NULL ${includeArchived ? '' : "AND status!='archived'"} ORDER BY created_at`).all() as Row[]
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM study_plans WHERE deleted_at IS NULL ${includeArchived ? '' : "AND status!='archived'"} ORDER BY created_at`,
+      )
+      .all() as Row[]
     return rows.map((row) => this.planSummary(row))
   }
   createPlan(input: StudyPlanInput): string {
-    const value = validatePlan(input), id = `plan_${crypto.randomUUID()}`, now = this.now().toISOString()
+    const value = validatePlan(input),
+      id = `plan_${crypto.randomUUID()}`,
+      now = this.now().toISOString()
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      this.db.prepare(`INSERT INTO study_plans(plan_id,name,status,daily_new_limit,daily_review_limit,new_order,created_at,updated_at,device_id,deleted_at)
-        VALUES(?,?,'active',?,?,'deterministic_random',?,?,?,NULL)`)
-        .run(id, value.name, value.dailyNewLimit, value.dailyReviewLimit, now, now, this.deviceId)
-      this.replaceSources(id, value.sources, now); this.db.exec('COMMIT'); return id
-    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+      this.db
+        .prepare(
+          `INSERT INTO study_plans(plan_id,name,status,daily_new_limit,daily_review_limit,new_order,created_at,updated_at,device_id,deleted_at)
+        VALUES(?,?,'active',?,?,'deterministic_random',?,?,?,NULL)`,
+        )
+        .run(
+          id,
+          value.name,
+          value.dailyNewLimit,
+          value.dailyReviewLimit,
+          now,
+          now,
+          this.deviceId,
+        )
+      this.replaceSources(id, value.sources, now)
+      this.db.exec('COMMIT')
+      return id
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
   updatePlan(planId: string, input: StudyPlanInput): void {
-    const value = validatePlan(input), now = this.now().toISOString(); this.db.exec('BEGIN IMMEDIATE')
+    const value = validatePlan(input),
+      now = this.now().toISOString()
+    this.db.exec('BEGIN IMMEDIATE')
     try {
-      const result = this.db.prepare(`UPDATE study_plans SET name=?,daily_new_limit=?,daily_review_limit=?,updated_at=?,device_id=? WHERE plan_id=? AND deleted_at IS NULL`)
-        .run(value.name, value.dailyNewLimit, value.dailyReviewLimit, now, this.deviceId, planId)
+      const result = this.db
+        .prepare(
+          `UPDATE study_plans SET name=?,daily_new_limit=?,daily_review_limit=?,updated_at=?,device_id=? WHERE plan_id=? AND deleted_at IS NULL`,
+        )
+        .run(
+          value.name,
+          value.dailyNewLimit,
+          value.dailyReviewLimit,
+          now,
+          this.deviceId,
+          planId,
+        )
       if (!result.changes) throw new Error('学习计划不存在')
-      this.replaceSources(planId, value.sources, now); this.db.exec('COMMIT')
-    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+      this.replaceSources(planId, value.sources, now)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
   setPlanStatus(planId: string, status: StudyPlanStatus): void {
-    if (!['active','paused','archived'].includes(status)) throw new Error('无效的计划状态')
-    const now = this.now().toISOString(); this.db.exec('BEGIN IMMEDIATE')
+    if (!['active', 'paused', 'archived'].includes(status))
+      throw new Error('无效的计划状态')
+    const now = this.now().toISOString()
+    this.db.exec('BEGIN IMMEDIATE')
     try {
-      const result = this.db.prepare('UPDATE study_plans SET status=?,updated_at=?,device_id=? WHERE plan_id=? AND deleted_at IS NULL').run(status,now,this.deviceId,planId)
+      const result = this.db
+        .prepare(
+          'UPDATE study_plans SET status=?,updated_at=?,device_id=? WHERE plan_id=? AND deleted_at IS NULL',
+        )
+        .run(status, now, this.deviceId, planId)
       if (!result.changes) throw new Error('学习计划不存在')
-      this.refreshLearningPlanSources(planId,now); this.db.exec('COMMIT')
-    } catch(error){this.db.exec('ROLLBACK');throw error}
+      this.refreshLearningPlanSources(planId, now)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
-  deletePlan(planId: string, confirmationName: string, options: StudyDeletePlanOptions = { resetWordProgress: false }): void {
-    this.requireDebug(); const plan=this.requirePlan(planId)
-    if (String(plan.name)!==confirmationName.normalize('NFKC').trim()) throw new Error('计划名称确认不匹配')
-    const resetWordProgress=options.resetWordProgress===true
-    const lexemeKeys=resetWordProgress?(this.db.prepare('SELECT DISTINCT lexeme_key FROM study_plan_lexeme_origins WHERE plan_id=?').all(planId) as Row[]).map(row=>String(row.lexeme_key)):[]
-    const now=this.now().toISOString(); this.db.exec('BEGIN IMMEDIATE')
+  deletePlan(
+    planId: string,
+    confirmationName: string,
+    options: StudyDeletePlanOptions = { resetWordProgress: false },
+  ): void {
+    if (options.resetWordProgress) this.requireDebug()
+    const plan = this.requirePlan(planId)
+    if (String(plan.name) !== confirmationName.normalize('NFKC').trim())
+      throw new Error('计划名称确认不匹配')
+    const resetWordProgress = options.resetWordProgress === true
+    const lexemeKeys = resetWordProgress
+      ? (
+          this.db
+            .prepare(
+              'SELECT DISTINCT lexeme_key FROM study_plan_lexeme_origins WHERE plan_id=?',
+            )
+            .all(planId) as Row[]
+        ).map((row) => String(row.lexeme_key))
+      : []
+    const now = this.now().toISOString()
+    this.db.exec('BEGIN IMMEDIATE')
     try {
-      this.removeQueuedPlanItems(planId,now)
-      if(resetWordProgress)this.resetProgressForLexemes(lexemeKeys,now)
-      this.db.prepare("UPDATE study_plans SET status='archived',deleted_at=?,updated_at=?,device_id=? WHERE plan_id=?").run(now,now,this.deviceId,planId)
-      this.db.prepare('UPDATE study_plan_sources SET active=0,removed_at=?,updated_at=?,device_id=? WHERE plan_id=?').run(now,now,this.deviceId,planId)
-      this.db.prepare('UPDATE study_plan_lexeme_origins SET active=0,removed_at=?,updated_at=?,device_id=? WHERE plan_id=?').run(now,now,this.deviceId,planId)
-      this.db.prepare("UPDATE vocabulary_sources SET active=0,removed_at=?,updated_at=?,device_id=? WHERE source_type='learning_plan' AND source_ref=?").run(now,now,this.deviceId,planId)
+      this.removeQueuedPlanItems(planId, now)
+      if (resetWordProgress) this.resetProgressForLexemes(lexemeKeys, now)
+      this.db
+        .prepare(
+          "UPDATE study_plans SET status='archived',deleted_at=?,updated_at=?,device_id=? WHERE plan_id=?",
+        )
+        .run(now, now, this.deviceId, planId)
+      this.db
+        .prepare(
+          'UPDATE study_plan_sources SET active=0,removed_at=?,updated_at=?,device_id=? WHERE plan_id=?',
+        )
+        .run(now, now, this.deviceId, planId)
+      this.db
+        .prepare(
+          'UPDATE study_plan_lexeme_origins SET active=0,removed_at=?,updated_at=?,device_id=? WHERE plan_id=?',
+        )
+        .run(now, now, this.deviceId, planId)
+      this.db
+        .prepare(
+          "UPDATE vocabulary_sources SET active=0,removed_at=?,updated_at=?,device_id=? WHERE source_type='learning_plan' AND source_ref=?",
+        )
+        .run(now, now, this.deviceId, planId)
       this.db.exec('COMMIT')
-    } catch(error){this.db.exec('ROLLBACK');throw error}
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
 
-  getPlan(planId:string):StudyPlanDetail{
-    const row=this.requirePlan(planId)
-    const sources=(this.db.prepare('SELECT * FROM study_plan_sources WHERE plan_id=? ORDER BY added_at').all(planId) as Row[]).map((s)=>({
-      sourceId:String(s.source_id),type:String(s.source_type) as 'reader_manual'|'exam_collection',ref:String(s.source_ref),active:Number(s.active)===1,
-      syncStatus:String(s.sync_status) as StudySourceSyncStatus,memberCount:Number(s.member_count),lastSyncedAt:s.last_synced_at==null?null:String(s.last_synced_at),syncError:s.sync_error==null?null:String(s.sync_error),
+  getPlan(planId: string): StudyPlanDetail {
+    const row = this.requirePlan(planId)
+    const sources = (
+      this.db
+        .prepare(
+          'SELECT * FROM study_plan_sources WHERE plan_id=? ORDER BY added_at',
+        )
+        .all(planId) as Row[]
+    ).map((s) => ({
+      sourceId: String(s.source_id),
+      type: String(s.source_type) as 'reader_manual' | 'exam_collection',
+      ref: String(s.source_ref),
+      active: Number(s.active) === 1,
+      syncStatus: String(s.sync_status) as StudySourceSyncStatus,
+      memberCount: Number(s.member_count),
+      lastSyncedAt: s.last_synced_at == null ? null : String(s.last_synced_at),
+      syncError: s.sync_error == null ? null : String(s.sync_error),
     }))
-    return {...this.planSummary(row),sources,distribution:this.distributionForPlan(planId)}
+    return {
+      ...this.planSummary(row),
+      sources,
+      distribution: this.distributionForPlan(planId),
+    }
   }
-  activeSources(planId?:string):Row[]{return this.db.prepare(`SELECT s.* FROM study_plan_sources s JOIN study_plans p ON p.plan_id=s.plan_id
-    WHERE s.active=1 AND p.deleted_at IS NULL ${planId?'AND s.plan_id=?':"AND p.status!='archived'"} ORDER BY s.added_at`).all(...(planId?[planId]:[])) as Row[]}
-  readerSourceItems():DictionaryLearningItem[]{return (this.db.prepare(`SELECT u.* FROM user_lexemes u JOIN vocabulary_sources s ON s.lexeme_key=u.lexeme_key
-    WHERE s.source_type='reader_manual' AND s.source_ref='favorite' AND s.active=1 ORDER BY s.added_at DESC`).all() as Row[]).map(rowToLearningItem)}
-  readerSourceRevision():string{const r=this.db.prepare("SELECT COUNT(*) count,COALESCE(MAX(updated_at),'') updated FROM vocabulary_sources WHERE source_type='reader_manual' AND source_ref='favorite' AND active=1").get() as Row;return `reader:${r.count}:${r.updated}`}
-  beginSourceSync(sourceId:string):void{this.db.prepare("UPDATE study_plan_sources SET sync_status='syncing',sync_error=NULL WHERE source_id=? AND active=1").run(sourceId)}
-  failSourceSync(sourceId:string,error:string):void{this.db.prepare("UPDATE study_plan_sources SET sync_status='error',sync_error=? WHERE source_id=?").run(error.slice(0,500),sourceId)}
-  sourceNeedsSync(source:Row,version:string):boolean{return String(source.sync_status)!=='ready'||String(source.sync_version??'')!==version}
-  applySourceSnapshot(sourceId:string,items:DictionaryLearningItem[],version='local'):void{
-    const source=this.db.prepare('SELECT * FROM study_plan_sources WHERE source_id=? AND active=1').get(sourceId) as Row|undefined;if(!source)return
-    const existing=new Set((this.db.prepare('SELECT lexeme_key FROM study_plan_lexeme_origins WHERE plan_source_id=? AND active=1').all(sourceId) as Row[]).map(r=>String(r.lexeme_key)))
-    const unchanged=existing.size===items.length&&items.every(i=>existing.has(i.lexemeKey));const now=this.now().toISOString();this.db.exec('BEGIN IMMEDIATE')
-    try{
-      if(!unchanged){
-        this.db.prepare('UPDATE study_plan_lexeme_origins SET active=0,removed_at=?,updated_at=?,device_id=? WHERE plan_source_id=? AND active=1').run(now,now,this.deviceId,sourceId)
-        const lex=this.db.prepare(`INSERT INTO user_lexemes(lexeme_key,lemma_snapshot,phonetic_snapshot,brief_meanings_json,sense_groups_json,bnc_rank,frequency_rank,manual_state,manual_familiarity,created_at,updated_at,device_id)
+  activeSources(planId?: string): Row[] {
+    return this.db
+      .prepare(
+        `SELECT s.* FROM study_plan_sources s JOIN study_plans p ON p.plan_id=s.plan_id
+    WHERE s.active=1 AND p.deleted_at IS NULL ${planId ? 'AND s.plan_id=?' : "AND p.status!='archived'"} ORDER BY s.added_at`,
+      )
+      .all(...(planId ? [planId] : [])) as Row[]
+  }
+  readerSourceItems(): DictionaryLearningItem[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT u.* FROM user_lexemes u JOIN vocabulary_sources s ON s.lexeme_key=u.lexeme_key
+    WHERE s.source_type='reader_manual' AND s.source_ref='favorite' AND s.active=1 ORDER BY s.added_at DESC`,
+        )
+        .all() as Row[]
+    ).map(rowToLearningItem)
+  }
+  readerSourceRevision(): string {
+    const r = this.db
+      .prepare(
+        "SELECT COUNT(*) count,COALESCE(MAX(updated_at),'') updated FROM vocabulary_sources WHERE source_type='reader_manual' AND source_ref='favorite' AND active=1",
+      )
+      .get() as Row
+    return `reader:${r.count}:${r.updated}`
+  }
+  beginSourceSync(sourceId: string): void {
+    this.db
+      .prepare(
+        "UPDATE study_plan_sources SET sync_status='syncing',sync_error=NULL WHERE source_id=? AND active=1",
+      )
+      .run(sourceId)
+  }
+  failSourceSync(sourceId: string, error: string): void {
+    this.db
+      .prepare(
+        "UPDATE study_plan_sources SET sync_status='error',sync_error=? WHERE source_id=?",
+      )
+      .run(error.slice(0, 500), sourceId)
+  }
+  sourceNeedsSync(source: Row, version: string): boolean {
+    return (
+      String(source.sync_status) !== 'ready' ||
+      String(source.sync_version ?? '') !== version
+    )
+  }
+  applySourceSnapshot(
+    sourceId: string,
+    items: DictionaryLearningItem[],
+    version = 'local',
+  ): void {
+    const source = this.db
+      .prepare(
+        'SELECT * FROM study_plan_sources WHERE source_id=? AND active=1',
+      )
+      .get(sourceId) as Row | undefined
+    if (!source) return
+    const existing = new Set(
+      (
+        this.db
+          .prepare(
+            'SELECT lexeme_key FROM study_plan_lexeme_origins WHERE plan_source_id=? AND active=1',
+          )
+          .all(sourceId) as Row[]
+      ).map((r) => String(r.lexeme_key)),
+    )
+    const unchanged =
+      existing.size === items.length &&
+      items.every((i) => existing.has(i.lexemeKey))
+    const now = this.now().toISOString()
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!unchanged) {
+        this.db
+          .prepare(
+            'UPDATE study_plan_lexeme_origins SET active=0,removed_at=?,updated_at=?,device_id=? WHERE plan_source_id=? AND active=1',
+          )
+          .run(now, now, this.deviceId, sourceId)
+        const lex = this.db
+          .prepare(`INSERT INTO user_lexemes(lexeme_key,lemma_snapshot,phonetic_snapshot,brief_meanings_json,sense_groups_json,bnc_rank,frequency_rank,manual_state,manual_familiarity,created_at,updated_at,device_id)
           VALUES(?,?,?,?,?,?,?,'unrated',NULL,?,?,?) ON CONFLICT(lexeme_key) DO UPDATE SET lemma_snapshot=excluded.lemma_snapshot,phonetic_snapshot=COALESCE(excluded.phonetic_snapshot,user_lexemes.phonetic_snapshot),brief_meanings_json=excluded.brief_meanings_json,sense_groups_json=CASE WHEN excluded.sense_groups_json='[]' THEN user_lexemes.sense_groups_json ELSE excluded.sense_groups_json END,bnc_rank=COALESCE(excluded.bnc_rank,user_lexemes.bnc_rank),frequency_rank=COALESCE(excluded.frequency_rank,user_lexemes.frequency_rank),updated_at=excluded.updated_at,device_id=excluded.device_id`)
-        const origin=this.db.prepare(`INSERT INTO study_plan_lexeme_origins(origin_id,plan_id,plan_source_id,lexeme_key,active,discovered_at,removed_at,updated_at,device_id)
+        const origin = this.db
+          .prepare(`INSERT INTO study_plan_lexeme_origins(origin_id,plan_id,plan_source_id,lexeme_key,active,discovered_at,removed_at,updated_at,device_id)
           VALUES(?,?,?,?,1,?,NULL,?,?) ON CONFLICT(plan_source_id,lexeme_key) DO UPDATE SET active=1,removed_at=NULL,updated_at=excluded.updated_at,device_id=excluded.device_id`)
-        for(const item of items){lex.run(item.lexemeKey,item.lemma,item.phonetic,JSON.stringify(item.briefMeanings),JSON.stringify(item.senses),item.bnc,item.frequency,now,now,this.deviceId);origin.run(stableIdentity(sourceId,item.lexemeKey),String(source.plan_id),sourceId,item.lexemeKey,now,now,this.deviceId)}
-        this.refreshLearningPlanSources(String(source.plan_id),now)
+        for (const item of items) {
+          lex.run(
+            item.lexemeKey,
+            item.lemma,
+            item.phonetic,
+            JSON.stringify(item.briefMeanings),
+            JSON.stringify(item.senses),
+            item.bnc,
+            item.frequency,
+            now,
+            now,
+            this.deviceId,
+          )
+          origin.run(
+            stableIdentity(sourceId, item.lexemeKey),
+            String(source.plan_id),
+            sourceId,
+            item.lexemeKey,
+            now,
+            now,
+            this.deviceId,
+          )
+        }
+        this.refreshLearningPlanSources(String(source.plan_id), now)
       }
-      this.db.prepare("UPDATE study_plan_sources SET sync_status='ready',sync_version=?,member_count=?,last_synced_at=?,sync_error=NULL,updated_at=?,device_id=? WHERE source_id=?")
-        .run(version,items.length,now,now,this.deviceId,sourceId)
+      this.db
+        .prepare(
+          "UPDATE study_plan_sources SET sync_status='ready',sync_version=?,member_count=?,last_synced_at=?,sync_error=NULL,updated_at=?,device_id=? WHERE source_id=?",
+        )
+        .run(version, items.length, now, now, this.deviceId, sourceId)
       this.db.exec('COMMIT')
-    }catch(error){this.db.exec('ROLLBACK');throw error}
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
 
-  setWordExcluded(planId:string,key:string,excluded:boolean):void{const now=this.now().toISOString();this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare(`INSERT INTO study_plan_exclusions(plan_id,lexeme_key,excluded,excluded_at,restored_at,updated_at,device_id) VALUES(?,?,?,?,?,?,?) ON CONFLICT(plan_id,lexeme_key) DO UPDATE SET excluded=excluded.excluded,excluded_at=excluded.excluded_at,restored_at=excluded.restored_at,updated_at=excluded.updated_at,device_id=excluded.device_id`).run(planId,key,excluded?1:0,excluded?now:null,excluded?null:now,now,this.deviceId);this.refreshLearningPlanSourceForKey(planId,key,now);this.db.exec('COMMIT')}catch(e){this.db.exec('ROLLBACK');throw e}}
-  setWordSuspended(key:string,suspended:boolean):void{if(!this.db.prepare('SELECT 1 FROM user_lexemes WHERE lexeme_key=?').get(key))throw new Error('词条不存在');const now=this.now().toISOString();this.db.prepare(`INSERT INTO review_suspensions(lexeme_key,active,reason,suspended_at,restored_at,updated_at,device_id) VALUES(?,?,'too_easy',?,?,?,?) ON CONFLICT(lexeme_key) DO UPDATE SET active=excluded.active,restored_at=excluded.restored_at,updated_at=excluded.updated_at,device_id=excluded.device_id`).run(key,suspended?1:0,now,suspended?null:now,now,this.deviceId)}
-
-  listPlanWords(planId:string,q:StudyPlanWordQuery):StudyPlanWordPage{
-    this.requirePlan(planId);const limit=Math.min(100,Math.max(1,Number(q.limit)||50)),offset=Math.max(0,Number(q.offset)||0),text=String(q.text??'').normalize('NFKC').trim().toLowerCase();const now=this.now().toISOString()
-    const params:Array<string|number>=[planId],where=['o.plan_id=?','o.active=1'];if(text){where.push('(lower(u.lemma_snapshot) LIKE ? OR u.brief_meanings_json LIKE ?)');params.push(`%${text}%`,`%${text}%`)}
-    const filter=q.filter??'all';if(filter==='excluded')where.push('COALESCE(x.excluded,0)=1');else where.push('COALESCE(x.excluded,0)=0')
-    if(filter==='due'){where.push('c.state!=0 AND c.due_at<=? AND COALESCE(rs.active,0)=0');params.push(now)}
-    if(filter==='unseen')where.push('c.lexeme_key IS NULL AND COALESCE(rs.active,0)=0')
-    if(filter==='learning')where.push('c.state IN (1,3) AND COALESCE(rs.active,0)=0')
-    if(filter==='consolidating')where.push('c.state=2 AND c.scheduled_days<21 AND COALESCE(rs.active,0)=0')
-    if(filter==='mature')where.push('c.state=2 AND c.scheduled_days>=21 AND COALESCE(rs.active,0)=0')
-    if(filter==='suspended')where.push('rs.active=1')
-    const from=`FROM study_plan_lexeme_origins o JOIN user_lexemes u ON u.lexeme_key=o.lexeme_key LEFT JOIN study_plan_exclusions x ON x.plan_id=o.plan_id AND x.lexeme_key=o.lexeme_key LEFT JOIN review_cards c ON c.lexeme_key=o.lexeme_key LEFT JOIN review_suspensions rs ON rs.lexeme_key=o.lexeme_key WHERE ${where.join(' AND ')}`
-    const total=this.db.prepare(`SELECT COUNT(DISTINCT o.lexeme_key) count ${from}`).get(...params) as Row
-    const relevance=text?`CASE WHEN lower(u.lemma_snapshot)=? THEN 0 WHEN lower(u.lemma_snapshot) LIKE ? THEN 1 WHEN lower(u.lemma_snapshot) LIKE ? THEN 2 ELSE 3 END,`:''
-    const orderParams=text?[text,`${escapeLike(text)}%`,`%${escapeLike(text)}%`]:[]
-    const rows=this.db.prepare(`SELECT c.*,u.*,COALESCE(x.excluded,0) excluded,COALESCE(rs.active,0) suspended,(SELECT group_concat(DISTINCT ps.source_ref) FROM study_plan_lexeme_origins po JOIN study_plan_sources ps ON ps.source_id=po.plan_source_id WHERE po.plan_id=o.plan_id AND po.lexeme_key=o.lexeme_key AND po.active=1 AND ps.active=1) source_refs ${from} GROUP BY o.lexeme_key ORDER BY ${relevance} u.lemma_snapshot COLLATE NOCASE LIMIT ? OFFSET ?`).all(...params,...orderParams,limit,offset) as Row[]
-    const prefs=this.getPreferences();return{items:rows.map(r=>mapPlanWord(r,prefs,this.now())),total:Number(total.count),offset,limit}
+  setWordExcluded(planId: string, key: string, excluded: boolean): void {
+    const now = this.now().toISOString()
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO study_plan_exclusions(plan_id,lexeme_key,excluded,excluded_at,restored_at,updated_at,device_id) VALUES(?,?,?,?,?,?,?) ON CONFLICT(plan_id,lexeme_key) DO UPDATE SET excluded=excluded.excluded,excluded_at=excluded.excluded_at,restored_at=excluded.restored_at,updated_at=excluded.updated_at,device_id=excluded.device_id`,
+        )
+        .run(
+          planId,
+          key,
+          excluded ? 1 : 0,
+          excluded ? now : null,
+          excluded ? null : now,
+          now,
+          this.deviceId,
+        )
+      this.refreshLearningPlanSourceForKey(planId, key, now)
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+  setWordSuspended(key: string, suspended: boolean): void {
+    if (
+      !this.db.prepare('SELECT 1 FROM user_lexemes WHERE lexeme_key=?').get(key)
+    )
+      throw new Error('词条不存在')
+    const now = this.now().toISOString()
+    this.db
+      .prepare(
+        `INSERT INTO review_suspensions(lexeme_key,active,reason,suspended_at,restored_at,updated_at,device_id) VALUES(?,?,'too_easy',?,?,?,?) ON CONFLICT(lexeme_key) DO UPDATE SET active=excluded.active,restored_at=excluded.restored_at,updated_at=excluded.updated_at,device_id=excluded.device_id`,
+      )
+      .run(
+        key,
+        suspended ? 1 : 0,
+        now,
+        suspended ? null : now,
+        now,
+        this.deviceId,
+      )
   }
 
-  getDashboard():StudyDashboard{const plans=this.listPlans(true),todayRow=this.currentSessionRow(),today=todayRow?this.todaySummary(String(todayRow.session_id)):null;return{plans,today,preview:this.preview(),developerMode:this.getDebugState().enabled}}
-  listTodayWords(sessionId:string,q:StudyTodayWordQuery):StudyTodayWordPage{const all=this.todayWords(sessionId),filtered=all.filter(w=>q.filter==='all'||q.filter===w.kind||(q.filter==='review'&&w.kind==='carryover')||(q.filter==='known'&&w.firstAnswer==='known')||(q.filter==='unknown'&&w.firstAnswer==='unknown')||(q.filter==='too_easy'&&w.tooEasy));const offset=Math.max(0,q.offset||0),limit=Math.min(100,Math.max(1,q.limit||50));return{items:filtered.slice(offset,offset+limit),total:filtered.length,offset,limit}}
+  listPlanWords(planId: string, q: StudyPlanWordQuery): StudyPlanWordPage {
+    this.requirePlan(planId)
+    const limit = Math.min(100, Math.max(1, Number(q.limit) || 50)),
+      offset = Math.max(0, Number(q.offset) || 0),
+      text = String(q.text ?? '')
+        .normalize('NFKC')
+        .trim()
+        .toLowerCase()
+    const now = this.now().toISOString()
+    const params: Array<string | number> = [planId],
+      where = ['o.plan_id=?', 'o.active=1']
+    if (text) {
+      where.push(
+        '(lower(u.lemma_snapshot) LIKE ? OR u.brief_meanings_json LIKE ?)',
+      )
+      params.push(`%${text}%`, `%${text}%`)
+    }
+    const filter = q.filter ?? 'all'
+    if (filter === 'excluded') where.push('COALESCE(x.excluded,0)=1')
+    else where.push('COALESCE(x.excluded,0)=0')
+    if (filter === 'due') {
+      where.push('c.state!=0 AND c.due_at<=? AND COALESCE(rs.active,0)=0')
+      params.push(now)
+    }
+    if (filter === 'unseen')
+      where.push('c.lexeme_key IS NULL AND COALESCE(rs.active,0)=0')
+    if (filter === 'learning')
+      where.push('c.state IN (1,3) AND COALESCE(rs.active,0)=0')
+    if (filter === 'consolidating')
+      where.push(
+        'c.state=2 AND c.scheduled_days<21 AND COALESCE(rs.active,0)=0',
+      )
+    if (filter === 'mature')
+      where.push(
+        'c.state=2 AND c.scheduled_days>=21 AND COALESCE(rs.active,0)=0',
+      )
+    if (filter === 'suspended') where.push('rs.active=1')
+    const from = `FROM study_plan_lexeme_origins o JOIN user_lexemes u ON u.lexeme_key=o.lexeme_key LEFT JOIN study_plan_exclusions x ON x.plan_id=o.plan_id AND x.lexeme_key=o.lexeme_key LEFT JOIN review_cards c ON c.lexeme_key=o.lexeme_key LEFT JOIN review_suspensions rs ON rs.lexeme_key=o.lexeme_key WHERE ${where.join(' AND ')}`
+    const total = this.db
+      .prepare(`SELECT COUNT(DISTINCT o.lexeme_key) count ${from}`)
+      .get(...params) as Row
+    const relevance = text
+      ? `CASE WHEN lower(u.lemma_snapshot)=? THEN 0 WHEN lower(u.lemma_snapshot) LIKE ? THEN 1 WHEN lower(u.lemma_snapshot) LIKE ? THEN 2 ELSE 3 END,`
+      : ''
+    const orderParams = text
+      ? [text, `${escapeLike(text)}%`, `%${escapeLike(text)}%`]
+      : []
+    const rows = this.db
+      .prepare(
+        `SELECT c.*,u.*,COALESCE(x.excluded,0) excluded,COALESCE(rs.active,0) suspended,(SELECT group_concat(DISTINCT ps.source_ref) FROM study_plan_lexeme_origins po JOIN study_plan_sources ps ON ps.source_id=po.plan_source_id WHERE po.plan_id=o.plan_id AND po.lexeme_key=o.lexeme_key AND po.active=1 AND ps.active=1) source_refs ${from} GROUP BY o.lexeme_key ORDER BY ${relevance} u.lemma_snapshot COLLATE NOCASE LIMIT ? OFFSET ?`,
+      )
+      .all(...params, ...orderParams, limit, offset) as Row[]
+    const prefs = this.getPreferences()
+    return {
+      items: rows.map((r) => mapPlanWord(r, prefs, this.now())),
+      total: Number(total.count),
+      offset,
+      limit,
+    }
+  }
 
-  openToday():StudySessionState{const now=this.now(),latest=this.latestSession();if(latest&&now.getTime()<Date.parse(String(latest.next_rollover_at)))return this.sessionState(String(latest.session_id));return this.createSession(now,latest,false)}
-  stageAnswer(request:StudyStageAnswerRequest):StudySessionState{const item=this.requireCurrentItem(request.sessionId,request.itemId,request.expectedVersion,'pending');this.db.prepare("UPDATE study_session_items SET status='revealed',proposed_answer=?,version=version+1,updated_at=? WHERE item_id=?").run(request.answer,this.now().toISOString(),String(item.item_id));return this.sessionState(request.sessionId)}
-  commitAnswer(request:StudyAnswerRequest):StudySessionState{
-    const previous=this.findCommandSession(request.commandId);if(previous)return this.sessionState(previous)
-    const now=this.now();this.db.exec('BEGIN IMMEDIATE')
-    try{
-      const item=this.requireCurrentItem(request.sessionId,request.itemId,request.expectedVersion,'revealed'),proposed=String(item.proposed_answer??'')
-      if(!['known','unknown'].includes(proposed)||proposed==='unknown'&&request.answer!=='unknown')throw new Error('最终判断无效')
-      const first=Number(item.fsrs_committed)===0
-      if(first){const outcome=applyFsrs(this.card(String(item.lexeme_key)),request.answer,now,this.getPreferences()),profile=this.ensureProfile(outcome.parameters,now);this.saveCard(String(item.lexeme_key),outcome.after,now);this.db.prepare('INSERT INTO review_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(crypto.randomUUID(),request.commandId,String(item.lexeme_key),request.sessionId,request.itemId,item.plan_id==null?null:String(item.plan_id),request.answer,outcome.rating,profile,JSON.stringify(outcome.before),JSON.stringify(outcome.after),JSON.stringify(outcome.log),now.toISOString(),this.deviceId)}
-      const transition=nextReinforcementState(request.answer,Number(item.had_failure)===1,Number(item.consecutive_known))
-      if(!first)this.db.prepare(`INSERT INTO reinforcement_events VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(crypto.randomUUID(),request.commandId,String(item.lexeme_key),request.sessionId,request.itemId,item.plan_id==null?null:String(item.plan_id),request.answer,Number(item.consecutive_known),transition.consecutiveKnown,now.toISOString(),this.deviceId)
-      const status=transition.completed?'completed':'pending';this.db.prepare(`UPDATE study_session_items SET status=?,proposed_answer=NULL,fsrs_committed=1,had_failure=?,consecutive_known=?,attempt_count=attempt_count+1,version=version+1,updated_at=? WHERE item_id=?`).run(status,transition.hadFailure?1:0,transition.consecutiveKnown,now.toISOString(),request.itemId)
-      if(status==='pending')this.reinsertRandom(request.sessionId,request.itemId,Number(item.attempt_count)+1)
-      this.releaseDeferredNewIfReady(request.sessionId,now)
-      this.finishSessionIfEmpty(request.sessionId,now);this.db.exec('COMMIT')
-    }catch(error){this.db.exec('ROLLBACK');throw error}
+  getDashboard(): StudyDashboard {
+    const plans = this.listPlans(true),
+      todayRow = this.currentSessionRow(),
+      today = todayRow ? this.todaySummary(String(todayRow.session_id)) : null
+    return {
+      plans,
+      today,
+      preview: this.preview(),
+      developerMode: this.getDebugState().enabled,
+    }
+  }
+  listTodayWords(
+    sessionId: string,
+    q: StudyTodayWordQuery,
+  ): StudyTodayWordPage {
+    const all = this.todayWords(sessionId),
+      filtered = all.filter(
+        (w) =>
+          q.filter === 'all' ||
+          q.filter === w.kind ||
+          (q.filter === 'review' && w.kind === 'carryover') ||
+          (q.filter === 'known' && w.firstAnswer === 'known') ||
+          (q.filter === 'unknown' && w.firstAnswer === 'unknown') ||
+          (q.filter === 'too_easy' && w.tooEasy),
+      )
+    const offset = Math.max(0, q.offset || 0),
+      limit = Math.min(100, Math.max(1, q.limit || 50))
+    return {
+      items: filtered.slice(offset, offset + limit),
+      total: filtered.length,
+      offset,
+      limit,
+    }
+  }
+
+  openToday(): StudySessionState {
+    const now = this.now(),
+      latest = this.latestSession()
+    if (latest && now.getTime() < Date.parse(String(latest.next_rollover_at)))
+      return this.sessionState(String(latest.session_id))
+    return this.createSession(now, latest, false)
+  }
+  stageAnswer(request: StudyStageAnswerRequest): StudySessionState {
+    const item = this.requireCurrentItem(
+      request.sessionId,
+      request.itemId,
+      request.expectedVersion,
+      'pending',
+    )
+    this.db
+      .prepare(
+        "UPDATE study_session_items SET status='revealed',proposed_answer=?,version=version+1,updated_at=? WHERE item_id=?",
+      )
+      .run(request.answer, this.now().toISOString(), String(item.item_id))
     return this.sessionState(request.sessionId)
   }
-  markTooEasy(request:StudyTooEasyRequest):StudySessionState{const previous=this.findCommandSession(request.commandId);if(previous)return this.sessionState(previous);const now=this.now();this.db.exec('BEGIN IMMEDIATE');try{const item=this.requireCurrentItem(request.sessionId,request.itemId,request.expectedVersion,'pending');if(Number(item.attempt_count)>0||Number(item.had_failure)===1)throw new Error('强化中的词不能标记为太简单');this.setWordSuspendedInTransaction(String(item.lexeme_key),true,now.toISOString());this.db.prepare('INSERT INTO reinforcement_events VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(crypto.randomUUID(),request.commandId,String(item.lexeme_key),request.sessionId,request.itemId,item.plan_id==null?null:String(item.plan_id),'too_easy',0,0,now.toISOString(),this.deviceId);this.db.prepare("UPDATE study_session_items SET status='completed',attempt_count=attempt_count+1,version=version+1,updated_at=? WHERE item_id=?").run(now.toISOString(),request.itemId);this.releaseDeferredNewIfReady(request.sessionId,now);this.finishSessionIfEmpty(request.sessionId,now);this.db.exec('COMMIT')}catch(e){this.db.exec('ROLLBACK');throw e}return this.sessionState(request.sessionId)}
+  commitAnswer(request: StudyAnswerRequest): StudySessionState {
+    const previous = this.findCommandSession(request.commandId)
+    if (previous) return this.sessionState(previous)
+    const now = this.now()
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const item = this.requireCurrentItem(
+          request.sessionId,
+          request.itemId,
+          request.expectedVersion,
+          'revealed',
+        ),
+        proposed = String(item.proposed_answer ?? '')
+      if (
+        !['known', 'unknown'].includes(proposed) ||
+        (proposed === 'unknown' && request.answer !== 'unknown')
+      )
+        throw new Error('最终判断无效')
+      const first = Number(item.fsrs_committed) === 0
+      if (first) {
+        const outcome = applyFsrs(
+            this.card(String(item.lexeme_key)),
+            request.answer,
+            now,
+            this.getPreferences(),
+          ),
+          profile = this.ensureProfile(outcome.parameters, now)
+        this.saveCard(String(item.lexeme_key), outcome.after, now)
+        this.db
+          .prepare(
+            'INSERT INTO review_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          )
+          .run(
+            crypto.randomUUID(),
+            request.commandId,
+            String(item.lexeme_key),
+            request.sessionId,
+            request.itemId,
+            item.plan_id == null ? null : String(item.plan_id),
+            request.answer,
+            outcome.rating,
+            profile,
+            JSON.stringify(outcome.before),
+            JSON.stringify(outcome.after),
+            JSON.stringify(outcome.log),
+            now.toISOString(),
+            this.deviceId,
+          )
+      }
+      const transition = nextReinforcementState(
+        request.answer,
+        Number(item.had_failure) === 1,
+        Number(item.consecutive_known),
+      )
+      if (!first)
+        this.db
+          .prepare(
+            `INSERT INTO reinforcement_events VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+          )
+          .run(
+            crypto.randomUUID(),
+            request.commandId,
+            String(item.lexeme_key),
+            request.sessionId,
+            request.itemId,
+            item.plan_id == null ? null : String(item.plan_id),
+            request.answer,
+            Number(item.consecutive_known),
+            transition.consecutiveKnown,
+            now.toISOString(),
+            this.deviceId,
+          )
+      const status = transition.completed ? 'completed' : 'pending'
+      this.db
+        .prepare(
+          `UPDATE study_session_items SET status=?,proposed_answer=NULL,fsrs_committed=1,had_failure=?,consecutive_known=?,attempt_count=attempt_count+1,version=version+1,updated_at=? WHERE item_id=?`,
+        )
+        .run(
+          status,
+          transition.hadFailure ? 1 : 0,
+          transition.consecutiveKnown,
+          now.toISOString(),
+          request.itemId,
+        )
+      if (status === 'pending')
+        this.reinsertRandom(
+          request.sessionId,
+          request.itemId,
+          Number(item.attempt_count) + 1,
+        )
+      this.releaseDeferredNewIfReady(request.sessionId, now)
+      this.finishSessionIfEmpty(request.sessionId, now)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    return this.sessionState(request.sessionId)
+  }
+  markTooEasy(request: StudyTooEasyRequest): StudySessionState {
+    const previous = this.findCommandSession(request.commandId)
+    if (previous) return this.sessionState(previous)
+    const now = this.now()
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const item = this.requireCurrentItem(
+        request.sessionId,
+        request.itemId,
+        request.expectedVersion,
+        'pending',
+      )
+      if (Number(item.attempt_count) > 0 || Number(item.had_failure) === 1)
+        throw new Error('强化中的词不能标记为太简单')
+      this.setWordSuspendedInTransaction(
+        String(item.lexeme_key),
+        true,
+        now.toISOString(),
+      )
+      this.db
+        .prepare(
+          'INSERT INTO reinforcement_events VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+        )
+        .run(
+          crypto.randomUUID(),
+          request.commandId,
+          String(item.lexeme_key),
+          request.sessionId,
+          request.itemId,
+          item.plan_id == null ? null : String(item.plan_id),
+          'too_easy',
+          0,
+          0,
+          now.toISOString(),
+          this.deviceId,
+        )
+      this.db
+        .prepare(
+          "UPDATE study_session_items SET status='completed',attempt_count=attempt_count+1,version=version+1,updated_at=? WHERE item_id=?",
+        )
+        .run(now.toISOString(), request.itemId)
+      this.releaseDeferredNewIfReady(request.sessionId, now)
+      this.finishSessionIfEmpty(request.sessionId, now)
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+    return this.sessionState(request.sessionId)
+  }
 
-  addExtraBatch(planId:string):StudySessionState{const session=this.openToday();if(session.status!=='completed')throw new Error('请先完成当前队列');const plan=this.requirePlan(planId);if(String(plan.status)!=='active')throw new Error('只能为启用中的计划追加任务');const now=this.now();this.db.exec('BEGIN IMMEDIATE');try{const batch=this.createBatch(session.sessionId,planId,'extra',Number(plan.daily_new_limit),Number(plan.daily_review_limit),now);this.allocatePlan(session.sessionId,batch,plan,now);this.reorderPending(session.sessionId,`${session.sessionId}:extra:${session.extraBatchCount+1}`);const count=this.pendingCount(session.sessionId);this.db.prepare(`UPDATE study_sessions SET status=?,completed_at=?,extra_batch_count=extra_batch_count+1,updated_at=? WHERE session_id=?`).run(count?'active':'completed',count?null:now.toISOString(),now.toISOString(),session.sessionId);this.db.exec('COMMIT')}catch(e){this.db.exec('ROLLBACK');throw e}return this.sessionState(session.sessionId)}
-  resetAllProgress(token:string):void{this.requireDebug();if(token!=='RESET_ALL_STUDY_PROGRESS')throw new Error('重置确认无效');const now=this.now().toISOString();this.db.exec('BEGIN IMMEDIATE');try{this.db.exec('DELETE FROM reinforcement_events;DELETE FROM review_events;DELETE FROM study_session_items;DELETE FROM study_session_batches;DELETE FROM study_sessions;DELETE FROM review_cards;DELETE FROM scheduler_profiles;');this.db.prepare(`INSERT INTO study_progress_state(state_id,reset_at,updated_at,device_id) VALUES('global',?,?,?) ON CONFLICT(state_id) DO UPDATE SET reset_at=excluded.reset_at,updated_at=excluded.updated_at,device_id=excluded.device_id`).run(now,now,this.deviceId);this.db.exec('COMMIT')}catch(e){this.db.exec('ROLLBACK');throw e}}
-  forceNextStudyDay(token:string):StudySessionState{this.requireDebug();if(token!=='NEXT_STUDY_DAY')throw new Error('推进学习日确认无效');const previous=this.latestSession(),now=this.now(),forcedNow=previous?new Date(Math.max(now.getTime(),Date.parse(String(previous.next_rollover_at))+1000)):now;return this.createSession(forcedNow,previous,true)}
+  addExtraBatch(planId: string): StudySessionState {
+    const session = this.openToday()
+    if (session.status !== 'completed') throw new Error('请先完成当前队列')
+    const plan = this.requirePlan(planId)
+    if (String(plan.status) !== 'active')
+      throw new Error('只能为启用中的计划追加任务')
+    const now = this.now()
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const batch = this.createBatch(
+        session.sessionId,
+        planId,
+        'extra',
+        Number(plan.daily_new_limit),
+        Number(plan.daily_review_limit),
+        now,
+      )
+      this.allocatePlan(session.sessionId, batch, plan, now)
+      this.reorderPending(
+        session.sessionId,
+        `${session.sessionId}:extra:${session.extraBatchCount + 1}`,
+      )
+      const count = this.pendingCount(session.sessionId)
+      this.db
+        .prepare(
+          `UPDATE study_sessions SET status=?,completed_at=?,extra_batch_count=extra_batch_count+1,updated_at=? WHERE session_id=?`,
+        )
+        .run(
+          count ? 'active' : 'completed',
+          count ? null : now.toISOString(),
+          now.toISOString(),
+          session.sessionId,
+        )
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+    return this.sessionState(session.sessionId)
+  }
+  resetAllProgress(token: string): void {
+    this.requireDebug()
+    if (token !== 'RESET_ALL_STUDY_PROGRESS') throw new Error('重置确认无效')
+    const now = this.now().toISOString()
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.exec(
+        'DELETE FROM reinforcement_events;DELETE FROM review_events;DELETE FROM study_session_items;DELETE FROM study_session_batches;DELETE FROM study_sessions;DELETE FROM review_cards;DELETE FROM scheduler_profiles;',
+      )
+      this.db
+        .prepare(
+          `INSERT INTO study_progress_state(state_id,reset_at,updated_at,device_id) VALUES('global',?,?,?) ON CONFLICT(state_id) DO UPDATE SET reset_at=excluded.reset_at,updated_at=excluded.updated_at,device_id=excluded.device_id`,
+        )
+        .run(now, now, this.deviceId)
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+  forceNextStudyDay(token: string): StudySessionState {
+    this.requireDebug()
+    if (token !== 'NEXT_STUDY_DAY') throw new Error('推进学习日确认无效')
+    const previous = this.latestSession(),
+      now = this.now(),
+      forcedNow = previous
+        ? new Date(
+            Math.max(
+              now.getTime(),
+              Date.parse(String(previous.next_rollover_at)) + 1000,
+            ),
+          )
+        : now
+    return this.createSession(forcedNow, previous, true)
+  }
 
-  private createSession(now:Date,previous:Row|undefined,forced:boolean):StudySessionState{const prefs=this.getPreferences(),moment=studyMoment(now,prefs.cutoffHour),id=crypto.randomUUID(),sequence=Number((this.db.prepare('SELECT MAX(day_sequence) value FROM study_sessions').get() as Row).value??0)+1;this.db.exec('BEGIN IMMEDIATE');try{if(previous)this.db.prepare("UPDATE study_sessions SET status='rolled_over',updated_at=? WHERE session_id=?").run(now.toISOString(),String(previous.session_id));this.db.prepare(`INSERT INTO study_sessions(session_id,day_sequence,logical_date,timezone,cutoff_hour,next_rollover_at,status,extra_batch_count,opened_at,completed_at,updated_at,device_id,debug_forced) VALUES(?,?,?,?,?,?,'active',0,?,NULL,?,?,?)`).run(id,sequence,moment.logicalDate,moment.timezone,prefs.cutoffHour,moment.nextRolloverAt,now.toISOString(),now.toISOString(),this.deviceId,forced?1:0);let carried=false;if(previous){const old=this.db.prepare("SELECT * FROM study_session_items WHERE session_id=? AND status IN ('pending','revealed') ORDER BY queue_position").all(String(previous.session_id)) as Row[];if(old.length){carried=true;const batch=this.createBatch(id,null,'carryover',0,0,now);for(const item of old){this.insertItem(id,batch,item.lexeme_key,item.plan_id,'carryover',now,{status:String(item.status),hadFailure:Number(item.had_failure),consecutive:Number(item.consecutive_known),attemptCount:Number(item.attempt_count),fsrsCommitted:Number(item.fsrs_committed),proposed:item.proposed_answer==null?null:String(item.proposed_answer),carriedFrom:String(item.item_id)});this.db.prepare("UPDATE study_session_items SET status='carried',updated_at=? WHERE item_id=?").run(now.toISOString(),String(item.item_id))}}}const plans=this.db.prepare("SELECT * FROM study_plans WHERE status='active' AND deleted_at IS NULL ORDER BY created_at,plan_id").all() as Row[];for(const plan of plans){const batch=this.createBatch(id,String(plan.plan_id),'regular',Number(plan.daily_new_limit),Number(plan.daily_review_limit),now);this.allocateReviews(id,batch,plan,now);if(!carried)this.allocateNew(id,batch,plan,Number(plan.daily_new_limit),now)}this.reorderPending(id,`${id}:regular`,true);this.finishSessionIfEmpty(id,now);this.db.exec('COMMIT')}catch(e){this.db.exec('ROLLBACK');throw e}return this.sessionState(id)}
-  private allocatePlan(session:string,batch:string,plan:Row,now:Date){this.allocateReviews(session,batch,plan,now);this.allocateNew(session,batch,plan,Number(plan.daily_new_limit),now)}
-  private allocateReviews(session:string,batch:string,plan:Row,now:Date){const rows=this.db.prepare(`${schedulableForPlanCte()} SELECT c.lexeme_key FROM eligible e JOIN review_cards c ON c.lexeme_key=e.lexeme_key WHERE e.plan_id=? AND c.state!=0 AND c.due_at<=? AND NOT EXISTS(SELECT 1 FROM study_session_items i WHERE i.session_id=? AND i.lexeme_key=c.lexeme_key) ORDER BY c.due_at LIMIT ?`).all(String(plan.plan_id),now.toISOString(),session,Number(plan.daily_review_limit)) as Row[];for(const r of rows)this.insertItem(session,batch,r.lexeme_key,plan.plan_id,'review',now)}
-  private allocateNew(session:string,batch:string,plan:Row,limit:number,now:Date){if(!limit)return;const rows=this.db.prepare(`${schedulableForPlanCte()} SELECT DISTINCT u.* FROM eligible e JOIN user_lexemes u ON u.lexeme_key=e.lexeme_key WHERE e.plan_id=? AND NOT EXISTS(SELECT 1 FROM review_cards c WHERE c.lexeme_key=e.lexeme_key) AND NOT EXISTS(SELECT 1 FROM study_session_items i WHERE i.session_id=? AND i.lexeme_key=e.lexeme_key)`).all(String(plan.plan_id),session) as Row[],day=this.db.prepare('SELECT logical_date FROM study_sessions WHERE session_id=?').get(session) as Row;const seed=`${day.logical_date}:${plan.plan_id}`;rows.sort((a,b)=>weightedNewScore(seed,String(a.lexeme_key),rankOrNull(a.frequency_rank,a.bnc_rank))-weightedNewScore(seed,String(b.lexeme_key),rankOrNull(b.frequency_rank,b.bnc_rank)));for(const r of rows.slice(0,limit))this.insertItem(session,batch,r.lexeme_key,plan.plan_id,'new',now)}
-  private reorderPending(session:string,seed:string,keepCarry=false){const rows=this.db.prepare("SELECT item_id,kind FROM study_session_items WHERE session_id=? AND status='pending' ORDER BY queue_position").all(session) as Row[],carry=keepCarry?rows.filter(r=>String(r.kind)==='carryover'):[],regular=keepCarry?rows.filter(r=>String(r.kind)!=='carryover'):rows,reviews=regular.filter(r=>String(r.kind)==='review'),news=regular.filter(r=>String(r.kind)==='new'),ordered=[...carry,...mergeDailyPools(reviews,news,this.getPreferences().queueOrder,seed)];const update=this.db.prepare('UPDATE study_session_items SET queue_position=? WHERE item_id=?');ordered.forEach((r,i)=>update.run(i+1,String(r.item_id)))}
-  private reinsertRandom(session:string,itemId:string,attempt:number){const others=this.db.prepare("SELECT item_id FROM study_session_items WHERE session_id=? AND item_id!=? AND status IN ('pending','revealed') ORDER BY queue_position").all(session,itemId) as Row[],index=reinforcementInsertionIndex(`${session}:${itemId}:${attempt}`,others.length),ids=others.map(r=>String(r.item_id));ids.splice(index,0,itemId);const update=this.db.prepare('UPDATE study_session_items SET queue_position=? WHERE item_id=?');ids.forEach((id,i)=>update.run(i+1,id))}
-  private releaseDeferredNewIfReady(session:string,now:Date){const carry=this.db.prepare("SELECT 1 FROM study_session_batches WHERE session_id=? AND kind='carryover'").get(session);if(!carry)return;const pending=this.db.prepare("SELECT 1 FROM study_session_items WHERE session_id=? AND kind='carryover' AND status IN ('pending','revealed') LIMIT 1").get(session),released=this.db.prepare("SELECT 1 FROM study_session_batches WHERE session_id=? AND kind='deferred_new'").get(session);if(pending||released)return;const rows=this.db.prepare(`SELECT p.*,b.new_limit FROM study_session_batches b JOIN study_plans p ON p.plan_id=b.plan_id WHERE b.session_id=? AND b.kind='regular' AND p.status='active' AND p.deleted_at IS NULL ORDER BY p.created_at,p.plan_id`).all(session) as Row[];for(const plan of rows){const batch=this.createBatch(session,String(plan.plan_id),'deferred_new',Number(plan.new_limit),0,now);this.allocateNew(session,batch,plan,Number(plan.new_limit),now)}this.reorderPending(session,`${session}:deferred`)}
+  private createSession(
+    now: Date,
+    previous: Row | undefined,
+    forced: boolean,
+  ): StudySessionState {
+    const prefs = this.getPreferences(),
+      moment = studyMoment(now, prefs.cutoffHour),
+      id = crypto.randomUUID(),
+      sequence =
+        Number(
+          (
+            this.db
+              .prepare('SELECT MAX(day_sequence) value FROM study_sessions')
+              .get() as Row
+          ).value ?? 0,
+        ) + 1
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (previous)
+        this.db
+          .prepare(
+            "UPDATE study_sessions SET status='rolled_over',updated_at=? WHERE session_id=?",
+          )
+          .run(now.toISOString(), String(previous.session_id))
+      this.db
+        .prepare(
+          `INSERT INTO study_sessions(session_id,day_sequence,logical_date,timezone,cutoff_hour,next_rollover_at,status,extra_batch_count,opened_at,completed_at,updated_at,device_id,debug_forced) VALUES(?,?,?,?,?,?,'active',0,?,NULL,?,?,?)`,
+        )
+        .run(
+          id,
+          sequence,
+          moment.logicalDate,
+          moment.timezone,
+          prefs.cutoffHour,
+          moment.nextRolloverAt,
+          now.toISOString(),
+          now.toISOString(),
+          this.deviceId,
+          forced ? 1 : 0,
+        )
+      let carried = false
+      if (previous) {
+        const old = this.db
+          .prepare(
+            "SELECT * FROM study_session_items WHERE session_id=? AND status IN ('pending','revealed') ORDER BY queue_position",
+          )
+          .all(String(previous.session_id)) as Row[]
+        if (old.length) {
+          carried = true
+          const batch = this.createBatch(id, null, 'carryover', 0, 0, now)
+          for (const item of old) {
+            this.insertItem(
+              id,
+              batch,
+              item.lexeme_key,
+              item.plan_id,
+              'carryover',
+              now,
+              {
+                status: String(item.status),
+                hadFailure: Number(item.had_failure),
+                consecutive: Number(item.consecutive_known),
+                attemptCount: Number(item.attempt_count),
+                fsrsCommitted: Number(item.fsrs_committed),
+                proposed:
+                  item.proposed_answer == null
+                    ? null
+                    : String(item.proposed_answer),
+                carriedFrom: String(item.item_id),
+              },
+            )
+            this.db
+              .prepare(
+                "UPDATE study_session_items SET status='carried',updated_at=? WHERE item_id=?",
+              )
+              .run(now.toISOString(), String(item.item_id))
+          }
+        }
+      }
+      const plans = this.db
+        .prepare(
+          "SELECT * FROM study_plans WHERE status='active' AND deleted_at IS NULL ORDER BY created_at,plan_id",
+        )
+        .all() as Row[]
+      for (const plan of plans) {
+        const batch = this.createBatch(
+          id,
+          String(plan.plan_id),
+          'regular',
+          Number(plan.daily_new_limit),
+          Number(plan.daily_review_limit),
+          now,
+        )
+        this.allocateReviews(id, batch, plan, now)
+        if (!carried)
+          this.allocateNew(id, batch, plan, Number(plan.daily_new_limit), now)
+      }
+      this.reorderPending(id, `${id}:regular`, true)
+      this.finishSessionIfEmpty(id, now)
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+    return this.sessionState(id)
+  }
+  private allocatePlan(session: string, batch: string, plan: Row, now: Date) {
+    this.allocateReviews(session, batch, plan, now)
+    this.allocateNew(session, batch, plan, Number(plan.daily_new_limit), now)
+  }
+  private allocateReviews(
+    session: string,
+    batch: string,
+    plan: Row,
+    now: Date,
+  ) {
+    const rows = this.db
+      .prepare(
+        `${schedulableForPlanCte()} SELECT c.lexeme_key FROM eligible e JOIN review_cards c ON c.lexeme_key=e.lexeme_key WHERE e.plan_id=? AND c.state!=0 AND c.due_at<=? AND NOT EXISTS(SELECT 1 FROM study_session_items i WHERE i.session_id=? AND i.lexeme_key=c.lexeme_key) ORDER BY c.due_at LIMIT ?`,
+      )
+      .all(
+        String(plan.plan_id),
+        now.toISOString(),
+        session,
+        Number(plan.daily_review_limit),
+      ) as Row[]
+    for (const r of rows)
+      this.insertItem(session, batch, r.lexeme_key, plan.plan_id, 'review', now)
+  }
+  private allocateNew(
+    session: string,
+    batch: string,
+    plan: Row,
+    limit: number,
+    now: Date,
+  ) {
+    if (!limit) return
+    const rows = this.db
+        .prepare(
+          `${schedulableForPlanCte()} SELECT DISTINCT u.* FROM eligible e JOIN user_lexemes u ON u.lexeme_key=e.lexeme_key WHERE e.plan_id=? AND NOT EXISTS(SELECT 1 FROM review_cards c WHERE c.lexeme_key=e.lexeme_key) AND NOT EXISTS(SELECT 1 FROM study_session_items i WHERE i.session_id=? AND i.lexeme_key=e.lexeme_key)`,
+        )
+        .all(String(plan.plan_id), session) as Row[],
+      day = this.db
+        .prepare('SELECT logical_date FROM study_sessions WHERE session_id=?')
+        .get(session) as Row
+    const seed = `${day.logical_date}:${plan.plan_id}`
+    rows.sort(
+      (a, b) =>
+        weightedNewScore(
+          seed,
+          String(a.lexeme_key),
+          rankOrNull(a.frequency_rank, a.bnc_rank),
+        ) -
+        weightedNewScore(
+          seed,
+          String(b.lexeme_key),
+          rankOrNull(b.frequency_rank, b.bnc_rank),
+        ),
+    )
+    for (const r of rows.slice(0, limit))
+      this.insertItem(session, batch, r.lexeme_key, plan.plan_id, 'new', now)
+  }
+  private reorderPending(session: string, seed: string, keepCarry = false) {
+    const rows = this.db
+        .prepare(
+          "SELECT item_id,kind FROM study_session_items WHERE session_id=? AND status='pending' ORDER BY queue_position",
+        )
+        .all(session) as Row[],
+      carry = keepCarry
+        ? rows.filter((r) => String(r.kind) === 'carryover')
+        : [],
+      regular = keepCarry
+        ? rows.filter((r) => String(r.kind) !== 'carryover')
+        : rows,
+      reviews = regular.filter((r) => String(r.kind) === 'review'),
+      news = regular.filter((r) => String(r.kind) === 'new'),
+      ordered = [
+        ...carry,
+        ...mergeDailyPools(
+          reviews,
+          news,
+          this.getPreferences().queueOrder,
+          seed,
+        ),
+      ]
+    const update = this.db.prepare(
+      'UPDATE study_session_items SET queue_position=? WHERE item_id=?',
+    )
+    ordered.forEach((r, i) => update.run(i + 1, String(r.item_id)))
+  }
+  private reinsertRandom(session: string, itemId: string, attempt: number) {
+    const others = this.db
+        .prepare(
+          "SELECT item_id FROM study_session_items WHERE session_id=? AND item_id!=? AND status IN ('pending','revealed') ORDER BY queue_position",
+        )
+        .all(session, itemId) as Row[],
+      index = reinforcementInsertionIndex(
+        `${session}:${itemId}:${attempt}`,
+        others.length,
+      ),
+      ids = others.map((r) => String(r.item_id))
+    ids.splice(index, 0, itemId)
+    const update = this.db.prepare(
+      'UPDATE study_session_items SET queue_position=? WHERE item_id=?',
+    )
+    ids.forEach((id, i) => update.run(i + 1, id))
+  }
+  private releaseDeferredNewIfReady(session: string, now: Date) {
+    const carry = this.db
+      .prepare(
+        "SELECT 1 FROM study_session_batches WHERE session_id=? AND kind='carryover'",
+      )
+      .get(session)
+    if (!carry) return
+    const pending = this.db
+        .prepare(
+          "SELECT 1 FROM study_session_items WHERE session_id=? AND kind='carryover' AND status IN ('pending','revealed') LIMIT 1",
+        )
+        .get(session),
+      released = this.db
+        .prepare(
+          "SELECT 1 FROM study_session_batches WHERE session_id=? AND kind='deferred_new'",
+        )
+        .get(session)
+    if (pending || released) return
+    const rows = this.db
+      .prepare(
+        `SELECT p.*,b.new_limit FROM study_session_batches b JOIN study_plans p ON p.plan_id=b.plan_id WHERE b.session_id=? AND b.kind='regular' AND p.status='active' AND p.deleted_at IS NULL ORDER BY p.created_at,p.plan_id`,
+      )
+      .all(session) as Row[]
+    for (const plan of rows) {
+      const batch = this.createBatch(
+        session,
+        String(plan.plan_id),
+        'deferred_new',
+        Number(plan.new_limit),
+        0,
+        now,
+      )
+      this.allocateNew(session, batch, plan, Number(plan.new_limit), now)
+    }
+    this.reorderPending(session, `${session}:deferred`)
+  }
 
-  private sessionState(id:string):StudySessionState{const s=this.db.prepare('SELECT * FROM study_sessions WHERE session_id=?').get(id) as Row|undefined;if(!s)throw new Error('学习会话不存在');const counts=this.db.prepare("SELECT COUNT(*) total,SUM(status='completed') completed FROM study_session_items WHERE session_id=?").get(id) as Row,item=this.db.prepare(`SELECT i.*,u.* FROM study_session_items i JOIN user_lexemes u ON u.lexeme_key=i.lexeme_key WHERE i.session_id=? AND i.status IN ('pending','revealed') ORDER BY i.queue_position LIMIT 1`).get(id) as Row|undefined,context=item?this.db.prepare('SELECT * FROM saved_contexts WHERE lexeme_key=? AND active=1 ORDER BY saved_at DESC LIMIT 1').get(String(item.lexeme_key)) as Row|undefined:undefined,total=Number(counts.total),completed=Number(counts.completed??0);return{sessionId:id,logicalDate:String(s.logical_date),status:String(s.status)==='completed'?'completed':'active',current:item?{itemId:String(item.item_id),kind:String(item.kind) as 'new'|'review'|'carryover',version:Number(item.version),lexemeKey:String(item.lexeme_key),lemma:String(item.lemma_snapshot),phonetic:item.phonetic_snapshot==null?null:String(item.phonetic_snapshot),briefMeanings:parseArray(item.brief_meanings_json),senseGroups:parseArray(item.sense_groups_json),context:context?mapContext(context):null,examples:this.database.listLexemeExamples(String(item.lexeme_key)),revealed:String(item.status)==='revealed',proposedAnswer:item.proposed_answer==null?null:String(item.proposed_answer) as 'known'|'unknown',hadFailure:Number(item.had_failure)===1,consecutiveKnown:Number(item.consecutive_known),attemptCount:Number(item.attempt_count),canMarkTooEasy:Number(item.attempt_count)===0&&Number(item.had_failure)===0&&String(item.status)==='pending'}:null,completed,total,remaining:total-completed,extraBatchCount:Number(s.extra_batch_count)}}
-  private todaySummary(id:string):StudyTodaySummary{const s=this.db.prepare('SELECT * FROM study_sessions WHERE session_id=?').get(id) as Row,words=this.todayWords(id),completed=words.filter(w=>w.completed).length,end=s.completed_at==null?this.now().getTime():Date.parse(String(s.completed_at)),durationSeconds=Math.max(0,Math.round((end-Date.parse(String(s.opened_at)))/1000));return{sessionId:id,logicalDate:String(s.logical_date),status:String(s.status)==='completed'?'completed':'active',completed,total:words.length,newCount:words.filter(w=>w.kind==='new').length,reviewCount:words.filter(w=>w.kind==='review').length,carryoverCount:words.filter(w=>w.kind==='carryover').length,unknownCount:words.filter(w=>w.firstAnswer==='unknown').length,tooEasyCount:words.filter(w=>w.tooEasy).length,extraBatchCount:Number(s.extra_batch_count),openedAt:String(s.opened_at),completedAt:s.completed_at==null?null:String(s.completed_at),durationSeconds,nextRolloverAt:String(s.next_rollover_at),recentWords:words.filter(w=>w.completed).slice(-5).reverse()}}
-  private todayWords(id:string):StudyTodayWord[]{return (this.db.prepare(`SELECT i.*,u.lemma_snapshot,u.phonetic_snapshot,u.brief_meanings_json,(SELECT answer FROM review_events r WHERE r.session_item_id=i.item_id ORDER BY reviewed_at LIMIT 1) first_review,(SELECT answer FROM reinforcement_events r WHERE r.session_item_id=i.item_id AND answer='too_easy' LIMIT 1) too_easy,(SELECT answer FROM (SELECT answer,reviewed_at happened_at FROM review_events WHERE session_item_id=i.item_id UNION ALL SELECT answer,created_at happened_at FROM reinforcement_events WHERE session_item_id=i.item_id) ORDER BY happened_at DESC LIMIT 1) final_answer,(SELECT article_title_snapshot FROM saved_contexts c WHERE c.lexeme_key=i.lexeme_key AND c.active=1 ORDER BY saved_at DESC LIMIT 1) context_article,(SELECT sentence_snapshot FROM saved_contexts c WHERE c.lexeme_key=i.lexeme_key AND c.active=1 ORDER BY saved_at DESC LIMIT 1) context_sentence,(SELECT COUNT(*) FROM review_events r WHERE r.session_item_id=i.item_id AND answer='unknown')+(SELECT COUNT(*) FROM reinforcement_events r WHERE r.session_item_id=i.item_id AND answer='unknown') unknown_count FROM study_session_items i JOIN user_lexemes u ON u.lexeme_key=i.lexeme_key WHERE i.session_id=? ORDER BY i.queue_position`).all(id) as Row[]).map(r=>{const tooEasy=Boolean(r.too_easy),firstAnswer=tooEasy?'too_easy':r.first_review==null?null:String(r.first_review) as 'known'|'unknown',finalAnswer=tooEasy?'too_easy':r.final_answer==null?null:String(r.final_answer) as 'known'|'unknown';return{itemId:String(r.item_id),lexemeKey:String(r.lexeme_key),lemma:String(r.lemma_snapshot),phonetic:r.phonetic_snapshot==null?null:String(r.phonetic_snapshot),meanings:parseArray(r.brief_meanings_json),kind:String(r.kind) as 'new'|'review'|'carryover',firstAnswer,finalAnswer,attemptCount:Number(r.attempt_count),unknownCount:Number(r.unknown_count),tooEasy,completed:String(r.status)==='completed',context:r.context_sentence==null?null:{articleTitle:String(r.context_article??''),sentence:String(r.context_sentence)},examples:this.database.listLexemeExamples(String(r.lexeme_key))}})}
-  private preview(){const now=this.now().toISOString(),review=Number((this.db.prepare(`${eligibleCardsCte()} SELECT COUNT(DISTINCT c.lexeme_key) count FROM eligible e JOIN review_cards c ON c.lexeme_key=e.lexeme_key WHERE c.state!=0 AND c.due_at<=?`).get(now) as Row).count),available=Number((this.db.prepare(`${eligibleCardsCte()} SELECT COUNT(DISTINCT e.lexeme_key) count FROM eligible e WHERE NOT EXISTS(SELECT 1 FROM review_cards c WHERE c.lexeme_key=e.lexeme_key)`).get() as Row).count),quota=Number((this.db.prepare("SELECT COALESCE(SUM(daily_new_limit),0) count FROM study_plans WHERE status='active' AND deleted_at IS NULL").get() as Row).count);return{newCount:Math.min(available,quota),reviewCount:review}}
+  private sessionState(id: string): StudySessionState {
+    const s = this.db
+      .prepare('SELECT * FROM study_sessions WHERE session_id=?')
+      .get(id) as Row | undefined
+    if (!s) throw new Error('学习会话不存在')
+    const counts = this.db
+        .prepare(
+          "SELECT COUNT(*) total,SUM(status='completed') completed FROM study_session_items WHERE session_id=?",
+        )
+        .get(id) as Row,
+      item = this.db
+        .prepare(
+          `SELECT i.*,u.* FROM study_session_items i JOIN user_lexemes u ON u.lexeme_key=i.lexeme_key WHERE i.session_id=? AND i.status IN ('pending','revealed') ORDER BY i.queue_position LIMIT 1`,
+        )
+        .get(id) as Row | undefined,
+      context = item
+        ? (this.db
+            .prepare(
+              'SELECT * FROM saved_contexts WHERE lexeme_key=? AND active=1 ORDER BY saved_at DESC LIMIT 1',
+            )
+            .get(String(item.lexeme_key)) as Row | undefined)
+        : undefined,
+      total = Number(counts.total),
+      completed = Number(counts.completed ?? 0)
+    return {
+      sessionId: id,
+      logicalDate: String(s.logical_date),
+      status: String(s.status) === 'completed' ? 'completed' : 'active',
+      current: item
+        ? {
+            itemId: String(item.item_id),
+            kind: String(item.kind) as 'new' | 'review' | 'carryover',
+            version: Number(item.version),
+            lexemeKey: String(item.lexeme_key),
+            lemma: String(item.lemma_snapshot),
+            phonetic:
+              item.phonetic_snapshot == null
+                ? null
+                : String(item.phonetic_snapshot),
+            briefMeanings: parseArray(item.brief_meanings_json),
+            senseGroups: parseArray(item.sense_groups_json),
+            context: context ? mapContext(context) : null,
+            examples: this.database.listLexemeExamples(String(item.lexeme_key)),
+            revealed: String(item.status) === 'revealed',
+            proposedAnswer:
+              item.proposed_answer == null
+                ? null
+                : (String(item.proposed_answer) as 'known' | 'unknown'),
+            hadFailure: Number(item.had_failure) === 1,
+            consecutiveKnown: Number(item.consecutive_known),
+            attemptCount: Number(item.attempt_count),
+            canMarkTooEasy:
+              Number(item.attempt_count) === 0 &&
+              Number(item.had_failure) === 0 &&
+              String(item.status) === 'pending',
+          }
+        : null,
+      completed,
+      total,
+      remaining: total - completed,
+      extraBatchCount: Number(s.extra_batch_count),
+    }
+  }
+  private todaySummary(id: string): StudyTodaySummary {
+    const s = this.db
+        .prepare('SELECT * FROM study_sessions WHERE session_id=?')
+        .get(id) as Row,
+      words = this.todayWords(id),
+      completed = words.filter((w) => w.completed).length,
+      end =
+        s.completed_at == null
+          ? this.now().getTime()
+          : Date.parse(String(s.completed_at)),
+      durationSeconds = Math.max(
+        0,
+        Math.round((end - Date.parse(String(s.opened_at))) / 1000),
+      )
+    return {
+      sessionId: id,
+      logicalDate: String(s.logical_date),
+      status: String(s.status) === 'completed' ? 'completed' : 'active',
+      completed,
+      total: words.length,
+      newCount: words.filter((w) => w.kind === 'new').length,
+      reviewCount: words.filter((w) => w.kind === 'review').length,
+      carryoverCount: words.filter((w) => w.kind === 'carryover').length,
+      unknownCount: words.filter((w) => w.firstAnswer === 'unknown').length,
+      tooEasyCount: words.filter((w) => w.tooEasy).length,
+      extraBatchCount: Number(s.extra_batch_count),
+      openedAt: String(s.opened_at),
+      completedAt: s.completed_at == null ? null : String(s.completed_at),
+      durationSeconds,
+      nextRolloverAt: String(s.next_rollover_at),
+      recentWords: words
+        .filter((w) => w.completed)
+        .slice(-5)
+        .reverse(),
+    }
+  }
+  private todayWords(id: string): StudyTodayWord[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT i.*,u.lemma_snapshot,u.phonetic_snapshot,u.brief_meanings_json,(SELECT answer FROM review_events r WHERE r.session_item_id=i.item_id ORDER BY reviewed_at LIMIT 1) first_review,(SELECT answer FROM reinforcement_events r WHERE r.session_item_id=i.item_id AND answer='too_easy' LIMIT 1) too_easy,(SELECT answer FROM (SELECT answer,reviewed_at happened_at FROM review_events WHERE session_item_id=i.item_id UNION ALL SELECT answer,created_at happened_at FROM reinforcement_events WHERE session_item_id=i.item_id) ORDER BY happened_at DESC LIMIT 1) final_answer,(SELECT article_title_snapshot FROM saved_contexts c WHERE c.lexeme_key=i.lexeme_key AND c.active=1 ORDER BY saved_at DESC LIMIT 1) context_article,(SELECT sentence_snapshot FROM saved_contexts c WHERE c.lexeme_key=i.lexeme_key AND c.active=1 ORDER BY saved_at DESC LIMIT 1) context_sentence,(SELECT COUNT(*) FROM review_events r WHERE r.session_item_id=i.item_id AND answer='unknown')+(SELECT COUNT(*) FROM reinforcement_events r WHERE r.session_item_id=i.item_id AND answer='unknown') unknown_count FROM study_session_items i JOIN user_lexemes u ON u.lexeme_key=i.lexeme_key WHERE i.session_id=? ORDER BY i.queue_position`,
+        )
+        .all(id) as Row[]
+    ).map((r) => {
+      const tooEasy = Boolean(r.too_easy),
+        firstAnswer = tooEasy
+          ? 'too_easy'
+          : r.first_review == null
+            ? null
+            : (String(r.first_review) as 'known' | 'unknown'),
+        finalAnswer = tooEasy
+          ? 'too_easy'
+          : r.final_answer == null
+            ? null
+            : (String(r.final_answer) as 'known' | 'unknown')
+      return {
+        itemId: String(r.item_id),
+        lexemeKey: String(r.lexeme_key),
+        lemma: String(r.lemma_snapshot),
+        phonetic:
+          r.phonetic_snapshot == null ? null : String(r.phonetic_snapshot),
+        meanings: parseArray(r.brief_meanings_json),
+        kind: String(r.kind) as 'new' | 'review' | 'carryover',
+        firstAnswer,
+        finalAnswer,
+        attemptCount: Number(r.attempt_count),
+        unknownCount: Number(r.unknown_count),
+        tooEasy,
+        completed: String(r.status) === 'completed',
+        context:
+          r.context_sentence == null
+            ? null
+            : {
+                articleTitle: String(r.context_article ?? ''),
+                sentence: String(r.context_sentence),
+              },
+        examples: this.database.listLexemeExamples(String(r.lexeme_key)),
+      }
+    })
+  }
+  private preview() {
+    const now = this.now().toISOString(),
+      review = Number(
+        (
+          this.db
+            .prepare(
+              `${eligibleCardsCte()} SELECT COUNT(DISTINCT c.lexeme_key) count FROM eligible e JOIN review_cards c ON c.lexeme_key=e.lexeme_key WHERE c.state!=0 AND c.due_at<=?`,
+            )
+            .get(now) as Row
+        ).count,
+      ),
+      available = Number(
+        (
+          this.db
+            .prepare(
+              `${eligibleCardsCte()} SELECT COUNT(DISTINCT e.lexeme_key) count FROM eligible e WHERE NOT EXISTS(SELECT 1 FROM review_cards c WHERE c.lexeme_key=e.lexeme_key)`,
+            )
+            .get() as Row
+        ).count,
+      ),
+      quota = Number(
+        (
+          this.db
+            .prepare(
+              "SELECT COALESCE(SUM(daily_new_limit),0) count FROM study_plans WHERE status='active' AND deleted_at IS NULL",
+            )
+            .get() as Row
+        ).count,
+      )
+    return { newCount: Math.min(available, quota), reviewCount: review }
+  }
 
-  private distributionForPlan(id:string):StudyDistribution{return distribution(this.db.prepare(`${eligibleForPlanCte()} SELECT c.*,COALESCE(rs.active,0) suspended FROM eligible e LEFT JOIN review_cards c ON c.lexeme_key=e.lexeme_key LEFT JOIN review_suspensions rs ON rs.lexeme_key=e.lexeme_key WHERE e.plan_id=?`).all(id) as Row[])}
-  private planSummary(row:Row):StudyPlanSummary{const id=String(row.plan_id),counts=this.db.prepare(`${eligibleForPlanCte()} SELECT COUNT(*) words,SUM(CASE WHEN c.state!=0 AND c.due_at<=? AND COALESCE(rs.active,0)=0 THEN 1 ELSE 0 END) due,SUM(CASE WHEN c.lexeme_key IS NULL AND COALESCE(rs.active,0)=0 THEN 1 ELSE 0 END) available FROM eligible e LEFT JOIN review_cards c ON c.lexeme_key=e.lexeme_key LEFT JOIN review_suspensions rs ON rs.lexeme_key=e.lexeme_key WHERE e.plan_id=?`).get(this.now().toISOString(),id) as Row,excluded=this.db.prepare('SELECT COUNT(*) count FROM study_plan_exclusions WHERE plan_id=? AND excluded=1').get(id) as Row,sync=this.db.prepare(`SELECT CASE WHEN SUM(sync_status='error')>0 THEN 'error' WHEN SUM(sync_status='syncing')>0 THEN 'syncing' WHEN SUM(sync_status='pending')>0 THEN 'pending' ELSE 'ready' END status,group_concat(CASE WHEN source_type='reader_manual' THEN '我的生词' ELSE upper(source_ref) END,'、') labels FROM study_plan_sources WHERE plan_id=? AND active=1`).get(id) as Row;return{planId:id,name:String(row.name),status:String(row.status) as StudyPlanStatus,dailyNewLimit:Number(row.daily_new_limit),dailyReviewLimit:Number(row.daily_review_limit),wordCount:Number(counts.words),dueCount:Number(counts.due??0),excludedCount:Number(excluded.count),availableNewCount:Number(counts.available??0),syncStatus:String(sync.status??'pending') as StudySourceSyncStatus,sourceLabels:String(sync.labels??'').split('、').filter(Boolean),createdAt:String(row.created_at)}}
-  private replaceSources(planId:string,sources:StudyPlanInput['sources'],now:string){const unique=new Map(sources.map(s=>[`${s.type}:${s.ref}`,s]));if(!unique.size)throw new Error('计划至少需要一个词汇来源');for(const r of this.db.prepare('SELECT * FROM study_plan_sources WHERE plan_id=?').all(planId) as Row[]){if(!unique.has(`${r.source_type}:${r.source_ref}`)){this.db.prepare('UPDATE study_plan_sources SET active=0,removed_at=?,updated_at=?,device_id=? WHERE source_id=?').run(now,now,this.deviceId,String(r.source_id));this.db.prepare('UPDATE study_plan_lexeme_origins SET active=0,removed_at=?,updated_at=?,device_id=? WHERE plan_source_id=?').run(now,now,this.deviceId,String(r.source_id))}}for(const s of unique.values()){const id=stableIdentity(planId,s.type,s.ref);this.db.prepare(`INSERT INTO study_plan_sources(source_id,plan_id,source_type,source_ref,active,added_at,removed_at,updated_at,device_id,sync_status,sync_version,member_count,last_synced_at,sync_error) VALUES(?,?,?,?,1,?,NULL,?,?,'pending',NULL,0,NULL,NULL) ON CONFLICT(plan_id,source_type,source_ref) DO UPDATE SET active=1,removed_at=NULL,sync_status=CASE WHEN study_plan_sources.active=0 THEN 'pending' ELSE study_plan_sources.sync_status END,updated_at=excluded.updated_at,device_id=excluded.device_id`).run(id,planId,s.type,s.ref,now,now,this.deviceId)}this.refreshLearningPlanSources(planId,now)}
-  private refreshLearningPlanSourceForKey(planId:string,key:string,now:string){const eligible=this.db.prepare(`${eligibleForPlanCte()} SELECT 1 FROM eligible WHERE plan_id=? AND lexeme_key=?`).get(planId,key) as Row|undefined;if(eligible){this.db.prepare(`INSERT INTO vocabulary_sources(source_id,lexeme_key,source_type,source_ref,active,added_at,removed_at,updated_at,device_id) VALUES(?,?,'learning_plan',?,1,?,NULL,?,?) ON CONFLICT(lexeme_key,source_type,source_ref) DO UPDATE SET active=1,removed_at=NULL,updated_at=excluded.updated_at,device_id=excluded.device_id`).run(vocabularySourceIdentity(key,'learning_plan',planId),key,planId,now,now,this.deviceId)}else this.db.prepare("UPDATE vocabulary_sources SET active=0,removed_at=?,updated_at=?,device_id=? WHERE source_type='learning_plan' AND source_ref=? AND lexeme_key=? AND active=1").run(now,now,this.deviceId,planId,key)}
-  private refreshLearningPlanSources(planId:string,now:string){const plan=this.requirePlan(planId),keys=String(plan.status)==='archived'||plan.deleted_at!=null?[]:(this.db.prepare(`${eligibleForPlanCte()} SELECT lexeme_key FROM eligible WHERE plan_id=?`).all(planId) as Row[]).map(r=>String(r.lexeme_key));this.db.prepare("UPDATE vocabulary_sources SET active=0,removed_at=?,updated_at=?,device_id=? WHERE source_type='learning_plan' AND source_ref=? AND active=1").run(now,now,this.deviceId,planId);const st=this.db.prepare(`INSERT INTO vocabulary_sources(source_id,lexeme_key,source_type,source_ref,active,added_at,removed_at,updated_at,device_id) VALUES(?,?,'learning_plan',?,1,?,NULL,?,?) ON CONFLICT(lexeme_key,source_type,source_ref) DO UPDATE SET active=1,removed_at=NULL,updated_at=excluded.updated_at,device_id=excluded.device_id`);for(const key of keys)st.run(vocabularySourceIdentity(key,'learning_plan',planId),key,planId,now,now,this.deviceId)}
-  private requirePlan(id:string):Row{const r=this.db.prepare('SELECT * FROM study_plans WHERE plan_id=? AND deleted_at IS NULL').get(id) as Row|undefined;if(!r)throw new Error('学习计划不存在');return r}
-  private requireDebug(){if(!this.getDebugState().enabled)throw new Error('请先在设置中启用开发与调试')}
-  private requireCurrentItem(session:string,item:string,version:number,status:string):Row{const r=this.db.prepare('SELECT * FROM study_session_items WHERE item_id=? AND session_id=?').get(item,session) as Row|undefined;if(!r||String(r.status)!==status||Number(r.version)!==version)throw new Error('学习队列已变化，请刷新后重试');return r}
-  private findCommandSession(command:string):string|null{const r=this.db.prepare(`SELECT session_id FROM review_events WHERE command_id=? UNION ALL SELECT session_id FROM reinforcement_events WHERE command_id=? LIMIT 1`).get(command,command) as Row|undefined;return r?.session_id==null?null:String(r.session_id)}
-  private latestSession():Row|undefined{return this.db.prepare('SELECT * FROM study_sessions ORDER BY day_sequence DESC LIMIT 1').get() as Row|undefined}
-  private currentSessionRow():Row|undefined{const r=this.latestSession();return r&&this.now().getTime()<Date.parse(String(r.next_rollover_at))?r:undefined}
-  private pendingCount(id:string){return Number((this.db.prepare("SELECT COUNT(*) count FROM study_session_items WHERE session_id=? AND status IN ('pending','revealed')").get(id) as Row).count)}
-  private finishSessionIfEmpty(id:string,now:Date){if(!this.pendingCount(id))this.db.prepare("UPDATE study_sessions SET status='completed',completed_at=?,updated_at=? WHERE session_id=?").run(now.toISOString(),now.toISOString(),id)}
-  private removeQueuedPlanItems(planId:string,now:string):void{const sessions=(this.db.prepare("SELECT DISTINCT session_id FROM study_session_items WHERE plan_id=? AND status IN ('pending','revealed')").all(planId) as Row[]).map(row=>String(row.session_id));this.db.prepare("DELETE FROM study_session_items WHERE plan_id=? AND status IN ('pending','revealed')").run(planId);for(const id of sessions)this.finishSessionIfEmpty(id,new Date(now))}
-  private resetProgressForLexemes(keys:string[],resetAt:string):void{if(!keys.length)return;const sessions=new Set<string>();const tombstone=this.db.prepare(`INSERT INTO study_lexeme_resets(lexeme_key,reset_at,updated_at,device_id) VALUES(?,?,?,?) ON CONFLICT(lexeme_key) DO UPDATE SET reset_at=excluded.reset_at,updated_at=excluded.updated_at,device_id=excluded.device_id`);for(const key of keys)tombstone.run(key,resetAt,resetAt,this.deviceId);for(const chunk of chunks(keys,450)){const placeholders=chunk.map(()=>'?').join(',');for(const row of this.db.prepare(`SELECT DISTINCT session_id FROM study_session_items WHERE lexeme_key IN (${placeholders})`).all(...chunk) as Row[])sessions.add(String(row.session_id));this.db.prepare(`DELETE FROM reinforcement_events WHERE lexeme_key IN (${placeholders})`).run(...chunk);this.db.prepare(`DELETE FROM review_events WHERE lexeme_key IN (${placeholders})`).run(...chunk);this.db.prepare(`DELETE FROM review_cards WHERE lexeme_key IN (${placeholders})`).run(...chunk);this.db.prepare(`DELETE FROM review_suspensions WHERE lexeme_key IN (${placeholders})`).run(...chunk);this.db.prepare(`DELETE FROM study_session_items WHERE lexeme_key IN (${placeholders})`).run(...chunk)}this.db.prepare('DELETE FROM scheduler_profiles WHERE profile_id NOT IN (SELECT DISTINCT profile_id FROM review_events)').run();const now=new Date(resetAt);for(const id of sessions)this.finishSessionIfEmpty(id,now)}
-  private createBatch(session:string,plan:string|null,kind:string,n:number,r:number,now:Date){const id=crypto.randomUUID();this.db.prepare('INSERT INTO study_session_batches VALUES(?,?,?,?,?,?,?)').run(id,session,plan,kind,n,r,now.toISOString());return id}
-  private insertItem(session:string,batch:string,key:unknown,plan:unknown,kind:string,now:Date,state?:{status:string;hadFailure:number;consecutive:number;attemptCount:number;fsrsCommitted:number;proposed:string|null;carriedFrom:string}){this.db.prepare(`INSERT OR IGNORE INTO study_session_items(item_id,session_id,batch_id,lexeme_key,plan_id,kind,queue_position,status,had_failure,consecutive_known,attempt_count,version,carried_from_item_id,created_at,updated_at,proposed_answer,fsrs_committed) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(crypto.randomUUID(),session,batch,String(key),plan==null?null:String(plan),kind,Number((this.db.prepare('SELECT MAX(queue_position) value FROM study_session_items WHERE session_id=?').get(session) as Row).value??0)+1,state?.status??'pending',state?.hadFailure??0,state?.consecutive??0,state?.attemptCount??0,1,state?.carriedFrom??null,now.toISOString(),now.toISOString(),state?.proposed??null,state?.fsrsCommitted??0)}
-  private card(key:string):StoredReviewCard|null{const r=this.db.prepare('SELECT * FROM review_cards WHERE lexeme_key=?').get(key) as Row|undefined;return r?rowToCard(r):null}
-  private saveCard(key:string,c:StoredReviewCard,now:Date){this.db.prepare(`INSERT INTO review_cards VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lexeme_key) DO UPDATE SET due_at=excluded.due_at,stability=excluded.stability,difficulty=excluded.difficulty,elapsed_days=excluded.elapsed_days,scheduled_days=excluded.scheduled_days,learning_steps=excluded.learning_steps,reps=excluded.reps,lapses=excluded.lapses,state=excluded.state,last_review_at=excluded.last_review_at,updated_at=excluded.updated_at,device_id=excluded.device_id`).run(key,c.dueAt,c.stability,c.difficulty,c.elapsedDays,c.scheduledDays,c.learningSteps,c.reps,c.lapses,c.state,c.lastReviewAt,now.toISOString(),this.deviceId)}
-  private ensureProfile(params:unknown,now:Date){const json=JSON.stringify(params),hash=crypto.createHash('sha256').update(json).digest('hex'),id=`fsrs_${hash.slice(0,24)}`;this.db.prepare('INSERT OR IGNORE INTO scheduler_profiles VALUES(?,?,?,?,?)').run(id,'6.0/ts-fsrs-5.4.1',json,hash,now.toISOString());return id}
-  private setWordSuspendedInTransaction(key:string,active:boolean,now:string){this.db.prepare(`INSERT INTO review_suspensions(lexeme_key,active,reason,suspended_at,restored_at,updated_at,device_id) VALUES(?,?,'too_easy',?,?,?,?) ON CONFLICT(lexeme_key) DO UPDATE SET active=excluded.active,restored_at=excluded.restored_at,updated_at=excluded.updated_at,device_id=excluded.device_id`).run(key,active?1:0,now,active?null:now,now,this.deviceId)}
+  private distributionForPlan(id: string): StudyDistribution {
+    return distribution(
+      this.db
+        .prepare(
+          `${eligibleForPlanCte()} SELECT c.*,COALESCE(rs.active,0) suspended FROM eligible e LEFT JOIN review_cards c ON c.lexeme_key=e.lexeme_key LEFT JOIN review_suspensions rs ON rs.lexeme_key=e.lexeme_key WHERE e.plan_id=?`,
+        )
+        .all(id) as Row[],
+    )
+  }
+  private planSummary(row: Row): StudyPlanSummary {
+    const id = String(row.plan_id),
+      counts = this.db
+        .prepare(
+          `${eligibleForPlanCte()} SELECT COUNT(*) words,SUM(CASE WHEN c.state!=0 AND c.due_at<=? AND COALESCE(rs.active,0)=0 THEN 1 ELSE 0 END) due,SUM(CASE WHEN c.lexeme_key IS NULL AND COALESCE(rs.active,0)=0 THEN 1 ELSE 0 END) available FROM eligible e LEFT JOIN review_cards c ON c.lexeme_key=e.lexeme_key LEFT JOIN review_suspensions rs ON rs.lexeme_key=e.lexeme_key WHERE e.plan_id=?`,
+        )
+        .get(this.now().toISOString(), id) as Row,
+      excluded = this.db
+        .prepare(
+          'SELECT COUNT(*) count FROM study_plan_exclusions WHERE plan_id=? AND excluded=1',
+        )
+        .get(id) as Row,
+      sync = this.db
+        .prepare(
+          `SELECT CASE WHEN SUM(sync_status='error')>0 THEN 'error' WHEN SUM(sync_status='syncing')>0 THEN 'syncing' WHEN SUM(sync_status='pending')>0 THEN 'pending' ELSE 'ready' END status,group_concat(CASE WHEN source_type='reader_manual' THEN '我的生词' ELSE upper(source_ref) END,'、') labels FROM study_plan_sources WHERE plan_id=? AND active=1`,
+        )
+        .get(id) as Row
+    return {
+      planId: id,
+      name: String(row.name),
+      status: String(row.status) as StudyPlanStatus,
+      dailyNewLimit: Number(row.daily_new_limit),
+      dailyReviewLimit: Number(row.daily_review_limit),
+      wordCount: Number(counts.words),
+      dueCount: Number(counts.due ?? 0),
+      excludedCount: Number(excluded.count),
+      availableNewCount: Number(counts.available ?? 0),
+      syncStatus: String(sync.status ?? 'pending') as StudySourceSyncStatus,
+      sourceLabels: String(sync.labels ?? '')
+        .split('、')
+        .filter(Boolean),
+      createdAt: String(row.created_at),
+    }
+  }
+  private replaceSources(
+    planId: string,
+    sources: StudyPlanInput['sources'],
+    now: string,
+  ) {
+    const unique = new Map(sources.map((s) => [`${s.type}:${s.ref}`, s]))
+    if (!unique.size) throw new Error('计划至少需要一个词汇来源')
+    for (const r of this.db
+      .prepare('SELECT * FROM study_plan_sources WHERE plan_id=?')
+      .all(planId) as Row[]) {
+      if (!unique.has(`${r.source_type}:${r.source_ref}`)) {
+        this.db
+          .prepare(
+            'UPDATE study_plan_sources SET active=0,removed_at=?,updated_at=?,device_id=? WHERE source_id=?',
+          )
+          .run(now, now, this.deviceId, String(r.source_id))
+        this.db
+          .prepare(
+            'UPDATE study_plan_lexeme_origins SET active=0,removed_at=?,updated_at=?,device_id=? WHERE plan_source_id=?',
+          )
+          .run(now, now, this.deviceId, String(r.source_id))
+      }
+    }
+    for (const s of unique.values()) {
+      const id = stableIdentity(planId, s.type, s.ref)
+      this.db
+        .prepare(
+          `INSERT INTO study_plan_sources(source_id,plan_id,source_type,source_ref,active,added_at,removed_at,updated_at,device_id,sync_status,sync_version,member_count,last_synced_at,sync_error) VALUES(?,?,?,?,1,?,NULL,?,?,'pending',NULL,0,NULL,NULL) ON CONFLICT(plan_id,source_type,source_ref) DO UPDATE SET active=1,removed_at=NULL,sync_status=CASE WHEN study_plan_sources.active=0 THEN 'pending' ELSE study_plan_sources.sync_status END,updated_at=excluded.updated_at,device_id=excluded.device_id`,
+        )
+        .run(id, planId, s.type, s.ref, now, now, this.deviceId)
+    }
+    this.refreshLearningPlanSources(planId, now)
+  }
+  private refreshLearningPlanSourceForKey(
+    planId: string,
+    key: string,
+    now: string,
+  ) {
+    const eligible = this.db
+      .prepare(
+        `${eligibleForPlanCte()} SELECT 1 FROM eligible WHERE plan_id=? AND lexeme_key=?`,
+      )
+      .get(planId, key) as Row | undefined
+    if (eligible) {
+      this.db
+        .prepare(
+          `INSERT INTO vocabulary_sources(source_id,lexeme_key,source_type,source_ref,active,added_at,removed_at,updated_at,device_id) VALUES(?,?,'learning_plan',?,1,?,NULL,?,?) ON CONFLICT(lexeme_key,source_type,source_ref) DO UPDATE SET active=1,removed_at=NULL,updated_at=excluded.updated_at,device_id=excluded.device_id`,
+        )
+        .run(
+          vocabularySourceIdentity(key, 'learning_plan', planId),
+          key,
+          planId,
+          now,
+          now,
+          this.deviceId,
+        )
+    } else
+      this.db
+        .prepare(
+          "UPDATE vocabulary_sources SET active=0,removed_at=?,updated_at=?,device_id=? WHERE source_type='learning_plan' AND source_ref=? AND lexeme_key=? AND active=1",
+        )
+        .run(now, now, this.deviceId, planId, key)
+  }
+  private refreshLearningPlanSources(planId: string, now: string) {
+    const plan = this.requirePlan(planId),
+      keys =
+        String(plan.status) === 'archived' || plan.deleted_at != null
+          ? []
+          : (
+              this.db
+                .prepare(
+                  `${eligibleForPlanCte()} SELECT lexeme_key FROM eligible WHERE plan_id=?`,
+                )
+                .all(planId) as Row[]
+            ).map((r) => String(r.lexeme_key))
+    this.db
+      .prepare(
+        "UPDATE vocabulary_sources SET active=0,removed_at=?,updated_at=?,device_id=? WHERE source_type='learning_plan' AND source_ref=? AND active=1",
+      )
+      .run(now, now, this.deviceId, planId)
+    const st = this.db.prepare(
+      `INSERT INTO vocabulary_sources(source_id,lexeme_key,source_type,source_ref,active,added_at,removed_at,updated_at,device_id) VALUES(?,?,'learning_plan',?,1,?,NULL,?,?) ON CONFLICT(lexeme_key,source_type,source_ref) DO UPDATE SET active=1,removed_at=NULL,updated_at=excluded.updated_at,device_id=excluded.device_id`,
+    )
+    for (const key of keys)
+      st.run(
+        vocabularySourceIdentity(key, 'learning_plan', planId),
+        key,
+        planId,
+        now,
+        now,
+        this.deviceId,
+      )
+  }
+  private requirePlan(id: string): Row {
+    const r = this.db
+      .prepare(
+        'SELECT * FROM study_plans WHERE plan_id=? AND deleted_at IS NULL',
+      )
+      .get(id) as Row | undefined
+    if (!r) throw new Error('学习计划不存在')
+    return r
+  }
+  private requireDebug() {
+    if (!this.getDebugState().enabled)
+      throw new Error('请先在设置中启用开发与调试')
+  }
+  private requireCurrentItem(
+    session: string,
+    item: string,
+    version: number,
+    status: string,
+  ): Row {
+    const r = this.db
+      .prepare(
+        'SELECT * FROM study_session_items WHERE item_id=? AND session_id=?',
+      )
+      .get(item, session) as Row | undefined
+    if (!r || String(r.status) !== status || Number(r.version) !== version)
+      throw new Error('学习队列已变化，请刷新后重试')
+    return r
+  }
+  private findCommandSession(command: string): string | null {
+    const r = this.db
+      .prepare(
+        `SELECT session_id FROM review_events WHERE command_id=? UNION ALL SELECT session_id FROM reinforcement_events WHERE command_id=? LIMIT 1`,
+      )
+      .get(command, command) as Row | undefined
+    return r?.session_id == null ? null : String(r.session_id)
+  }
+  private latestSession(): Row | undefined {
+    return this.db
+      .prepare(
+        'SELECT * FROM study_sessions ORDER BY day_sequence DESC LIMIT 1',
+      )
+      .get() as Row | undefined
+  }
+  private currentSessionRow(): Row | undefined {
+    const r = this.latestSession()
+    return r && this.now().getTime() < Date.parse(String(r.next_rollover_at))
+      ? r
+      : undefined
+  }
+  private pendingCount(id: string) {
+    return Number(
+      (
+        this.db
+          .prepare(
+            "SELECT COUNT(*) count FROM study_session_items WHERE session_id=? AND status IN ('pending','revealed')",
+          )
+          .get(id) as Row
+      ).count,
+    )
+  }
+  private finishSessionIfEmpty(id: string, now: Date) {
+    if (!this.pendingCount(id))
+      this.db
+        .prepare(
+          "UPDATE study_sessions SET status='completed',completed_at=?,updated_at=? WHERE session_id=?",
+        )
+        .run(now.toISOString(), now.toISOString(), id)
+  }
+  private removeQueuedPlanItems(planId: string, now: string): void {
+    const sessions = (
+      this.db
+        .prepare(
+          "SELECT DISTINCT session_id FROM study_session_items WHERE plan_id=? AND status IN ('pending','revealed')",
+        )
+        .all(planId) as Row[]
+    ).map((row) => String(row.session_id))
+    this.db
+      .prepare(
+        "DELETE FROM study_session_items WHERE plan_id=? AND status IN ('pending','revealed')",
+      )
+      .run(planId)
+    for (const id of sessions) this.finishSessionIfEmpty(id, new Date(now))
+  }
+  private resetProgressForLexemes(keys: string[], resetAt: string): void {
+    if (!keys.length) return
+    const sessions = new Set<string>()
+    const tombstone = this.db.prepare(
+      `INSERT INTO study_lexeme_resets(lexeme_key,reset_at,updated_at,device_id) VALUES(?,?,?,?) ON CONFLICT(lexeme_key) DO UPDATE SET reset_at=excluded.reset_at,updated_at=excluded.updated_at,device_id=excluded.device_id`,
+    )
+    for (const key of keys) tombstone.run(key, resetAt, resetAt, this.deviceId)
+    for (const chunk of chunks(keys, 450)) {
+      const placeholders = chunk.map(() => '?').join(',')
+      for (const row of this.db
+        .prepare(
+          `SELECT DISTINCT session_id FROM study_session_items WHERE lexeme_key IN (${placeholders})`,
+        )
+        .all(...chunk) as Row[])
+        sessions.add(String(row.session_id))
+      this.db
+        .prepare(
+          `DELETE FROM reinforcement_events WHERE lexeme_key IN (${placeholders})`,
+        )
+        .run(...chunk)
+      this.db
+        .prepare(
+          `DELETE FROM review_events WHERE lexeme_key IN (${placeholders})`,
+        )
+        .run(...chunk)
+      this.db
+        .prepare(
+          `DELETE FROM review_cards WHERE lexeme_key IN (${placeholders})`,
+        )
+        .run(...chunk)
+      this.db
+        .prepare(
+          `DELETE FROM review_suspensions WHERE lexeme_key IN (${placeholders})`,
+        )
+        .run(...chunk)
+      this.db
+        .prepare(
+          `DELETE FROM study_session_items WHERE lexeme_key IN (${placeholders})`,
+        )
+        .run(...chunk)
+    }
+    this.db
+      .prepare(
+        'DELETE FROM scheduler_profiles WHERE profile_id NOT IN (SELECT DISTINCT profile_id FROM review_events)',
+      )
+      .run()
+    const now = new Date(resetAt)
+    for (const id of sessions) this.finishSessionIfEmpty(id, now)
+  }
+  private createBatch(
+    session: string,
+    plan: string | null,
+    kind: string,
+    n: number,
+    r: number,
+    now: Date,
+  ) {
+    const id = crypto.randomUUID()
+    this.db
+      .prepare('INSERT INTO study_session_batches VALUES(?,?,?,?,?,?,?)')
+      .run(id, session, plan, kind, n, r, now.toISOString())
+    return id
+  }
+  private insertItem(
+    session: string,
+    batch: string,
+    key: unknown,
+    plan: unknown,
+    kind: string,
+    now: Date,
+    state?: {
+      status: string
+      hadFailure: number
+      consecutive: number
+      attemptCount: number
+      fsrsCommitted: number
+      proposed: string | null
+      carriedFrom: string
+    },
+  ) {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO study_session_items(item_id,session_id,batch_id,lexeme_key,plan_id,kind,queue_position,status,had_failure,consecutive_known,attempt_count,version,carried_from_item_id,created_at,updated_at,proposed_answer,fsrs_committed) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        crypto.randomUUID(),
+        session,
+        batch,
+        String(key),
+        plan == null ? null : String(plan),
+        kind,
+        Number(
+          (
+            this.db
+              .prepare(
+                'SELECT MAX(queue_position) value FROM study_session_items WHERE session_id=?',
+              )
+              .get(session) as Row
+          ).value ?? 0,
+        ) + 1,
+        state?.status ?? 'pending',
+        state?.hadFailure ?? 0,
+        state?.consecutive ?? 0,
+        state?.attemptCount ?? 0,
+        1,
+        state?.carriedFrom ?? null,
+        now.toISOString(),
+        now.toISOString(),
+        state?.proposed ?? null,
+        state?.fsrsCommitted ?? 0,
+      )
+  }
+  private card(key: string): StoredReviewCard | null {
+    const r = this.db
+      .prepare('SELECT * FROM review_cards WHERE lexeme_key=?')
+      .get(key) as Row | undefined
+    return r ? rowToCard(r) : null
+  }
+  private saveCard(key: string, c: StoredReviewCard, now: Date) {
+    this.db
+      .prepare(
+        `INSERT INTO review_cards VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lexeme_key) DO UPDATE SET due_at=excluded.due_at,stability=excluded.stability,difficulty=excluded.difficulty,elapsed_days=excluded.elapsed_days,scheduled_days=excluded.scheduled_days,learning_steps=excluded.learning_steps,reps=excluded.reps,lapses=excluded.lapses,state=excluded.state,last_review_at=excluded.last_review_at,updated_at=excluded.updated_at,device_id=excluded.device_id`,
+      )
+      .run(
+        key,
+        c.dueAt,
+        c.stability,
+        c.difficulty,
+        c.elapsedDays,
+        c.scheduledDays,
+        c.learningSteps,
+        c.reps,
+        c.lapses,
+        c.state,
+        c.lastReviewAt,
+        now.toISOString(),
+        this.deviceId,
+      )
+  }
+  private ensureProfile(params: unknown, now: Date) {
+    const json = JSON.stringify(params),
+      hash = crypto.createHash('sha256').update(json).digest('hex'),
+      id = `fsrs_${hash.slice(0, 24)}`
+    this.db
+      .prepare('INSERT OR IGNORE INTO scheduler_profiles VALUES(?,?,?,?,?)')
+      .run(id, '6.0/ts-fsrs-5.4.1', json, hash, now.toISOString())
+    return id
+  }
+  private setWordSuspendedInTransaction(
+    key: string,
+    active: boolean,
+    now: string,
+  ) {
+    this.db
+      .prepare(
+        `INSERT INTO review_suspensions(lexeme_key,active,reason,suspended_at,restored_at,updated_at,device_id) VALUES(?,?,'too_easy',?,?,?,?) ON CONFLICT(lexeme_key) DO UPDATE SET active=excluded.active,restored_at=excluded.restored_at,updated_at=excluded.updated_at,device_id=excluded.device_id`,
+      )
+      .run(key, active ? 1 : 0, now, active ? null : now, now, this.deviceId)
+  }
 }
 
-function eligibleForPlanCte(){return`WITH eligible AS (SELECT DISTINCT o.plan_id,o.lexeme_key FROM study_plan_lexeme_origins o JOIN study_plan_sources s ON s.source_id=o.plan_source_id LEFT JOIN study_plan_exclusions x ON x.plan_id=o.plan_id AND x.lexeme_key=o.lexeme_key WHERE o.active=1 AND s.active=1 AND COALESCE(x.excluded,0)=0)`}
-function schedulableForPlanCte(){return`WITH eligible AS (SELECT DISTINCT o.plan_id,o.lexeme_key FROM study_plan_lexeme_origins o JOIN study_plan_sources s ON s.source_id=o.plan_source_id LEFT JOIN study_plan_exclusions x ON x.plan_id=o.plan_id AND x.lexeme_key=o.lexeme_key LEFT JOIN review_suspensions rs ON rs.lexeme_key=o.lexeme_key WHERE o.active=1 AND s.active=1 AND COALESCE(x.excluded,0)=0 AND COALESCE(rs.active,0)=0)`}
-function eligibleCardsCte(){return`WITH eligible AS (SELECT DISTINCT o.lexeme_key FROM study_plan_lexeme_origins o JOIN study_plan_sources s ON s.source_id=o.plan_source_id JOIN study_plans p ON p.plan_id=o.plan_id LEFT JOIN study_plan_exclusions x ON x.plan_id=o.plan_id AND x.lexeme_key=o.lexeme_key LEFT JOIN review_suspensions rs ON rs.lexeme_key=o.lexeme_key WHERE o.active=1 AND s.active=1 AND p.status='active' AND p.deleted_at IS NULL AND COALESCE(x.excluded,0)=0 AND COALESCE(rs.active,0)=0)`}
-function validatePreferences(v:any):StudyPreferences{const c=Number(v.cutoffHour),r=Number(v.requestRetention),m=Number(v.maximumInterval),q=String(v.queueOrder??'mixed');if(!Number.isInteger(c)||c<0||c>23||r<.8||r>.95||!Number.isInteger(m)||m<30||m>36500||!['mixed','review_first','new_first'].includes(q))throw new Error('学习设置无效');return{cutoffHour:c,requestRetention:r,maximumInterval:m,queueOrder:q as StudyPreferences['queueOrder']}}
-function validatePlan(v:StudyPlanInput):StudyPlanInput{const name=String(v.name??'').normalize('NFKC').trim(),n=Number(v.dailyNewLimit),r=Number(v.dailyReviewLimit);if(!name||name.length>40)throw new Error('计划名称应为 1–40 个字符');if(!Number.isInteger(n)||n<0||n>500||!Number.isInteger(r)||r<1||r>2000)throw new Error('每日配额无效');const sources=(v.sources??[]).filter(s=>['reader_manual','exam_collection'].includes(s.type)&&typeof s.ref==='string'&&s.ref);if(!sources.length)throw new Error('计划至少需要一个词汇来源');return{name,dailyNewLimit:n,dailyReviewLimit:r,sources}}
-function parseArray<T=any>(v:unknown):T[]{try{const p=JSON.parse(String(v??'[]'));return Array.isArray(p)?p:[]}catch{return[]}}
-function rowToLearningItem(r:Row):DictionaryLearningItem{return{lexemeKey:String(r.lexeme_key),lemma:String(r.lemma_snapshot),phonetic:r.phonetic_snapshot==null?null:String(r.phonetic_snapshot),briefMeanings:parseArray(r.brief_meanings_json),senses:parseArray(r.sense_groups_json),bnc:r.bnc_rank==null?null:Number(r.bnc_rank),frequency:r.frequency_rank==null?null:Number(r.frequency_rank)}}
-function rowToCard(r:Row):StoredReviewCard{return{dueAt:String(r.due_at),stability:Number(r.stability),difficulty:Number(r.difficulty),elapsedDays:Number(r.elapsed_days),scheduledDays:Number(r.scheduled_days),learningSteps:Number(r.learning_steps),reps:Number(r.reps),lapses:Number(r.lapses),state:Number(r.state),lastReviewAt:r.last_review_at==null?null:String(r.last_review_at)}}
-function rankOrNull(...v:unknown[]):number|null{for(const x of v){const n=Number(x);if(Number.isFinite(n)&&n>0)return n}return null}
-function bucket(r:Row):keyof StudyDistribution{if(Number(r.suspended)===1)return'suspended';if(r.state==null||Number(r.state)===0)return'unseen';if([1,3].includes(Number(r.state)))return'learning';return Number(r.scheduled_days)>=21?'mature':'consolidating'}
-function distribution(rows:Row[]):StudyDistribution{const x={unseen:0,learning:0,consolidating:0,mature:0,suspended:0};for(const r of rows)x[bucket(r)]++;return x}
-function mapPlanWord(r:Row,p:StudyPreferences,now:Date){const card=r.due_at==null?null:rowToCard(r),state=bucket(r);return{lexemeKey:String(r.lexeme_key),lemma:String(r.lemma_snapshot),phonetic:r.phonetic_snapshot==null?null:String(r.phonetic_snapshot),meanings:parseArray(r.brief_meanings_json),sources:String(r.source_refs??'').split(',').filter(Boolean),excluded:Number(r.excluded)===1,suspended:Number(r.suspended)===1,state,difficulty:card?.difficulty??null,stability:card?.stability??null,retrievability:card?retrievability(card,now,p):null,dueAt:card?.dueAt??null,scheduledDays:card?.scheduledDays??null,reps:card?.reps??0,lapses:card?.lapses??0,lastReviewAt:card?.lastReviewAt??null}}
-function mapContext(r:Row){return{contextId:String(r.context_id),publicationId:r.publication_id==null?null:String(r.publication_id),publicationTitle:String(r.publication_title_snapshot),articleId:r.article_id==null?null:String(r.article_id),articleTitle:String(r.article_title_snapshot),sentence:String(r.sentence_snapshot),surface:String(r.surface),paragraph:String(r.paragraph_snapshot),savedAt:String(r.saved_at)}}
-function escapeLike(v:string){return v.replace(/[\\%_]/g,c=>`\\${c}`)}
-function chunks<T>(items:T[],size:number):T[][]{const result:T[][]=[];for(let index=0;index<items.length;index+=size)result.push(items.slice(index,index+size));return result}
+function eligibleForPlanCte() {
+  return `WITH eligible AS (SELECT DISTINCT o.plan_id,o.lexeme_key FROM study_plan_lexeme_origins o JOIN study_plan_sources s ON s.source_id=o.plan_source_id LEFT JOIN study_plan_exclusions x ON x.plan_id=o.plan_id AND x.lexeme_key=o.lexeme_key WHERE o.active=1 AND s.active=1 AND COALESCE(x.excluded,0)=0)`
+}
+function schedulableForPlanCte() {
+  return `WITH eligible AS (SELECT DISTINCT o.plan_id,o.lexeme_key FROM study_plan_lexeme_origins o JOIN study_plan_sources s ON s.source_id=o.plan_source_id LEFT JOIN study_plan_exclusions x ON x.plan_id=o.plan_id AND x.lexeme_key=o.lexeme_key LEFT JOIN review_suspensions rs ON rs.lexeme_key=o.lexeme_key WHERE o.active=1 AND s.active=1 AND COALESCE(x.excluded,0)=0 AND COALESCE(rs.active,0)=0)`
+}
+function eligibleCardsCte() {
+  return `WITH eligible AS (SELECT DISTINCT o.lexeme_key FROM study_plan_lexeme_origins o JOIN study_plan_sources s ON s.source_id=o.plan_source_id JOIN study_plans p ON p.plan_id=o.plan_id LEFT JOIN study_plan_exclusions x ON x.plan_id=o.plan_id AND x.lexeme_key=o.lexeme_key LEFT JOIN review_suspensions rs ON rs.lexeme_key=o.lexeme_key WHERE o.active=1 AND s.active=1 AND p.status='active' AND p.deleted_at IS NULL AND COALESCE(x.excluded,0)=0 AND COALESCE(rs.active,0)=0)`
+}
+function validatePreferences(v: any): StudyPreferences {
+  const c = Number(v.cutoffHour),
+    r = Number(v.requestRetention),
+    m = Number(v.maximumInterval),
+    q = String(v.queueOrder ?? 'mixed')
+  if (
+    !Number.isInteger(c) ||
+    c < 0 ||
+    c > 23 ||
+    r < 0.8 ||
+    r > 0.95 ||
+    !Number.isInteger(m) ||
+    m < 30 ||
+    m > 36500 ||
+    !['mixed', 'review_first', 'new_first'].includes(q)
+  )
+    throw new Error('学习设置无效')
+  return {
+    cutoffHour: c,
+    requestRetention: r,
+    maximumInterval: m,
+    queueOrder: q as StudyPreferences['queueOrder'],
+  }
+}
+function validatePlan(v: StudyPlanInput): StudyPlanInput {
+  const name = String(v.name ?? '')
+      .normalize('NFKC')
+      .trim(),
+    n = Number(v.dailyNewLimit),
+    r = Number(v.dailyReviewLimit)
+  if (!name || name.length > 40) throw new Error('计划名称应为 1–40 个字符')
+  if (
+    !Number.isInteger(n) ||
+    n < 0 ||
+    n > 500 ||
+    !Number.isInteger(r) ||
+    r < 1 ||
+    r > 2000
+  )
+    throw new Error('每日配额无效')
+  const sources = (v.sources ?? []).filter(
+    (s) =>
+      ['reader_manual', 'exam_collection'].includes(s.type) &&
+      typeof s.ref === 'string' &&
+      s.ref,
+  )
+  if (!sources.length) throw new Error('计划至少需要一个词汇来源')
+  return { name, dailyNewLimit: n, dailyReviewLimit: r, sources }
+}
+function parseArray<T = any>(v: unknown): T[] {
+  try {
+    const p = JSON.parse(String(v ?? '[]'))
+    return Array.isArray(p) ? p : []
+  } catch {
+    return []
+  }
+}
+function rowToLearningItem(r: Row): DictionaryLearningItem {
+  return {
+    lexemeKey: String(r.lexeme_key),
+    lemma: String(r.lemma_snapshot),
+    phonetic: r.phonetic_snapshot == null ? null : String(r.phonetic_snapshot),
+    briefMeanings: parseArray(r.brief_meanings_json),
+    senses: parseArray(r.sense_groups_json),
+    bnc: r.bnc_rank == null ? null : Number(r.bnc_rank),
+    frequency: r.frequency_rank == null ? null : Number(r.frequency_rank),
+  }
+}
+function rowToCard(r: Row): StoredReviewCard {
+  return {
+    dueAt: String(r.due_at),
+    stability: Number(r.stability),
+    difficulty: Number(r.difficulty),
+    elapsedDays: Number(r.elapsed_days),
+    scheduledDays: Number(r.scheduled_days),
+    learningSteps: Number(r.learning_steps),
+    reps: Number(r.reps),
+    lapses: Number(r.lapses),
+    state: Number(r.state),
+    lastReviewAt: r.last_review_at == null ? null : String(r.last_review_at),
+  }
+}
+function rankOrNull(...v: unknown[]): number | null {
+  for (const x of v) {
+    const n = Number(x)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return null
+}
+function bucket(r: Row): keyof StudyDistribution {
+  if (Number(r.suspended) === 1) return 'suspended'
+  if (r.state == null || Number(r.state) === 0) return 'unseen'
+  if ([1, 3].includes(Number(r.state))) return 'learning'
+  return Number(r.scheduled_days) >= 21 ? 'mature' : 'consolidating'
+}
+function distribution(rows: Row[]): StudyDistribution {
+  const x = {
+    unseen: 0,
+    learning: 0,
+    consolidating: 0,
+    mature: 0,
+    suspended: 0,
+  }
+  for (const r of rows) x[bucket(r)]++
+  return x
+}
+function mapPlanWord(r: Row, p: StudyPreferences, now: Date) {
+  const card = r.due_at == null ? null : rowToCard(r),
+    state = bucket(r)
+  return {
+    lexemeKey: String(r.lexeme_key),
+    lemma: String(r.lemma_snapshot),
+    phonetic: r.phonetic_snapshot == null ? null : String(r.phonetic_snapshot),
+    meanings: parseArray(r.brief_meanings_json),
+    sources: String(r.source_refs ?? '')
+      .split(',')
+      .filter(Boolean),
+    excluded: Number(r.excluded) === 1,
+    suspended: Number(r.suspended) === 1,
+    state,
+    difficulty: card?.difficulty ?? null,
+    stability: card?.stability ?? null,
+    retrievability: card ? retrievability(card, now, p) : null,
+    dueAt: card?.dueAt ?? null,
+    scheduledDays: card?.scheduledDays ?? null,
+    reps: card?.reps ?? 0,
+    lapses: card?.lapses ?? 0,
+    lastReviewAt: card?.lastReviewAt ?? null,
+  }
+}
+function mapContext(r: Row) {
+  return {
+    contextId: String(r.context_id),
+    publicationId: r.publication_id == null ? null : String(r.publication_id),
+    publicationTitle: String(r.publication_title_snapshot),
+    articleId: r.article_id == null ? null : String(r.article_id),
+    articleTitle: String(r.article_title_snapshot),
+    sentence: String(r.sentence_snapshot),
+    surface: String(r.surface),
+    paragraph: String(r.paragraph_snapshot),
+    savedAt: String(r.saved_at),
+  }
+}
+function escapeLike(v: string) {
+  return v.replace(/[\\%_]/g, (c) => `\\${c}`)
+}
+function chunks<T>(items: T[], size: number): T[][] {
+  const result: T[][] = []
+  for (let index = 0; index < items.length; index += size)
+    result.push(items.slice(index, index + size))
+  return result
+}

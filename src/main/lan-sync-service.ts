@@ -37,8 +37,8 @@ import {
 import {
   SYNC_MODEL_VERSION,
   type SyncApplyResult,
-  type SyncBatchV2,
-  type SyncPeerSummaryV2,
+  type SyncBatchV4,
+  type SyncPeerSummaryV4,
 } from '../core/sync-model'
 import type {
   SyncCompletedResult,
@@ -87,7 +87,7 @@ interface PairingRuntime {
 interface IncomingTransfer {
   id: string
   sender: LanSyncPeerIdentity
-  batch: SyncBatchV2 | null
+  batch: SyncBatchV4 | null
   payloadSha256: string
   payloadByteLength: number
   payloadPath: string
@@ -400,6 +400,12 @@ export class LanSyncService {
     return this.getState()
   }
 
+  getIncomingChanges(transferId: string, offset: number, limit: number) {
+    const transfer = this.requireIncoming(transferId)
+    if (transfer.status !== 'waiting' || !transfer.preview) throw new Error('同步请求已经处理或尚未验证完成')
+    return this.syncData.previewRecordPage(requireIncomingBatch(transfer), offset, limit)
+  }
+
   async acceptIncoming(transferId: string): Promise<SyncPageState> {
     const transfer = this.requireIncoming(transferId)
     if (transfer.status !== 'waiting') throw new Error('该同步请求已经处理')
@@ -472,7 +478,7 @@ export class LanSyncService {
   }
 
   private async runSend(endpoint: DiscoveredPeer, trusted: SyncTrustedPeer, abort: AbortController): Promise<void> {
-    let prepared: PreparedSyncTransfer<SyncBatchV2> | null = null
+    let prepared: PreparedSyncTransfer<SyncBatchV4> | null = null
     let cleanupPrepared = false
     try {
       this.updateOperation('summarizing', '正在读取固定的分页摘要…')
@@ -491,7 +497,7 @@ export class LanSyncService {
         changedEntities.push(...page.changedEntities)
         availableBlobHashes.push(...page.availableBlobHashes)
       }
-      const summary: SyncPeerSummaryV2 = {
+      const summary: SyncPeerSummaryV4 = {
         modelVersion: SYNC_MODEL_VERSION,
         deviceId: page.deviceId,
         currentRevision: page.currentRevision,
@@ -735,7 +741,7 @@ export class LanSyncService {
         discoveryVersion: Number(textValue(txt.w)) as typeof LAN_SYNC_WIRE_VERSION,
         messageId: crypto.randomUUID(),
         kind: 'announce',
-        modelVersion: Number(textValue(txt.m)) as 2,
+        modelVersion: Number(textValue(txt.m)) as typeof SYNC_MODEL_VERSION,
         deviceId: textValue(txt.id),
         name: textValue(txt.n),
         platform: textValue(txt.os) as 'windows' | 'android',
@@ -1905,7 +1911,7 @@ async function removePartialFiles(root: string): Promise<void> {
   ))
 }
 
-function requireIncomingBatch(transfer: IncomingTransfer): SyncBatchV2 {
+function requireIncomingBatch(transfer: IncomingTransfer): SyncBatchV4 {
   if (!transfer.batch) throw new HttpFailure(409, '同步批次尚未上传完成')
   return transfer.batch
 }

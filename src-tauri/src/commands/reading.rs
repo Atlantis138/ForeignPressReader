@@ -39,24 +39,6 @@ pub async fn begin_epub_import(
             session.entries(),
         )
     };
-    let existing = {
-        let database = state.database()?;
-        mobile_reading::find_publication_by_hash(&database, &hash)?
-    };
-    if let Some(publication_id) = existing {
-        let publication = {
-            let database = state.database()?;
-            mobile_reading::get_publication(&database, &publication_id)?
-        };
-        let result = mobile_reading::ImportResult {
-            publication,
-            duplicate: true,
-        };
-        state.imports()?.cancel(&session_id)?;
-        return Ok(BeginImportResult::Duplicate {
-            result: Box::new(result),
-        });
-    }
     Ok(BeginImportResult::Ready {
         session_id,
         display_name,
@@ -99,13 +81,30 @@ fn commit_epub_session(
             mobile_reading::find_publication_by_hash(&database, &session.content_hash)?
         };
         if let Some(publication_id) = existing {
-            let publication = {
-                let database = state.database()?;
-                mobile_reading::get_publication(&database, &publication_id)?
-            };
+            if publication_id != parsed_plan.id {
+                return Err(PlatformError::new(
+                    "importConflict",
+                    "刊物身份不一致。",
+                    false,
+                ));
+            }
+            session.extract_assets(&mut parsed_plan)?;
+            crate::publication_repair::copy_missing_assets(
+                &session.root.join("assets"),
+                &state
+                    .paths
+                    .data
+                    .join("library")
+                    .join(&publication_id)
+                    .join("assets"),
+                &parsed_plan.asset_paths,
+            )?;
+            let database = state.database()?;
+            let repaired = crate::publication_repair::repair(&database, &parsed_plan)?;
             return Ok(mobile_reading::ImportResult {
-                publication,
+                publication: mobile_reading::get_publication(&database, &publication_id)?,
                 duplicate: true,
+                repaired,
             });
         }
         let library_root = state.paths.data.join("library");
@@ -143,6 +142,7 @@ fn commit_epub_session(
         Ok(mobile_reading::ImportResult {
             publication,
             duplicate: false,
+            repaired: false,
         })
     })();
     epub_import::cleanup_session(&session);
@@ -293,4 +293,27 @@ pub fn save_mobile_reader_preferences(
 ) -> Result<ReaderPreferences, PlatformError> {
     let database = state.database()?;
     mobile_reading::save_preferences(&database, preferences)
+}
+
+#[tauri::command]
+pub fn reader_search_articles(
+    state: tauri::State<'_, PlatformState>,
+    query: serde_json::Value,
+) -> Result<serde_json::Value, PlatformError> {
+    crate::reader_records::search(&*state.database()?, &query)
+}
+#[tauri::command]
+pub fn reader_get_data(
+    state: tauri::State<'_, PlatformState>,
+    article_id: String,
+) -> Result<serde_json::Value, PlatformError> {
+    crate::reader_records::get(&*state.database()?, &article_id)
+}
+#[tauri::command]
+pub fn reader_change_data(
+    state: tauri::State<'_, PlatformState>,
+    article_id: String,
+    change: serde_json::Value,
+) -> Result<serde_json::Value, PlatformError> {
+    crate::reader_records::change(&*state.database()?, &article_id, &change)
 }

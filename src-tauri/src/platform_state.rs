@@ -78,7 +78,9 @@ impl PlatformState {
             &database,
             &paths.data.join("library"),
         )?;
-        mobile_reading::cleanup_orphaned_library(&database, &paths.data.join("library"))?;
+        if !paths.data.join("recovery-preserve-assets").exists() {
+            mobile_reading::cleanup_orphaned_library(&database, &paths.data.join("library"))?;
+        }
         dictionary_pack::prepare(&paths)?;
         mobile_portable::prepare(&paths)?;
         let mut logger = DiagnosticLogger::new(paths.logs.clone());

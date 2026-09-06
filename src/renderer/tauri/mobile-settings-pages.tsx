@@ -60,7 +60,7 @@ export function MobileSettingsHome({
       <SettingsRow icon={<DictionaryIcon />} title="词典服务" detail="本地 ECDICT · 百度增强 · AI 文中义" onClick={() => onOpen('dictionary')} />
       <SettingsRow icon={<SpeakerIcon />} title="语音服务" detail="系统、Google 与 MiniMax 朗读" status="可用" onClick={() => onOpen('speech')} />
       <SettingsRow icon={<StudyIcon />} title="每日学习" detail="队列顺序、学习日与 FSRS 参数" status="可用" onClick={() => onOpen('study')} />
-      <SettingsRow icon={<DatabaseIcon />} title="数据与存储" detail="本地优先 · formal-v1" onClick={() => onOpen('data')} />
+      <SettingsRow icon={<DatabaseIcon />} title="数据与存储" detail="备份、同步与空间管理" onClick={() => onOpen('data')} />
       {developerVisible && <SettingsRow icon={<SettingsIcon />} title="开发与调试" detail="学习调试、脱敏日志与恢复应用" onClick={() => onOpen('developer')} />}
     </div>
   </div>
@@ -77,6 +77,7 @@ export function MobileSettingsSectionPage({
   onBack,
   onOpen,
   onChange,
+  onDataChanged,
   onError,
   onNotice,
   onTask,
@@ -87,6 +88,7 @@ export function MobileSettingsSectionPage({
   onBack(): void
   onOpen(section: MobileSettingsSection): void
   onChange(value: ReaderPreferences): void
+  onDataChanged(): void | Promise<void>
   onError(message: string): void
   onNotice(message: string): void
   onTask(task: MobileTask | null): void
@@ -105,9 +107,9 @@ export function MobileSettingsSectionPage({
           : section === 'study'
             ? <MobileStudySettings client={clients.study} onError={onError} onNotice={onNotice} />
             : section === 'data'
-              ? <MobileDataSettings clients={clients} onOpenSync={() => onOpen('sync')} onError={onError} onNotice={onNotice} onTask={onTask} />
+              ? <MobileDataSettings clients={clients} onOpenSync={() => onOpen('sync')} onDataChanged={onDataChanged} onError={onError} onNotice={onNotice} onTask={onTask} />
               : section === 'sync'
-                ? <SyncSettingsPanel api={clients.sync} compact onError={onError} />
+                ? <SyncSettingsPanel api={clients.sync} compact onDataChanged={onDataChanged} onError={onError} />
                 : section === 'developer'
                   ? <MobileDeveloperSettings clients={clients} onError={onError} onNotice={onNotice} />
                   : <SettingsCapabilityCard section={section} />}
@@ -291,12 +293,14 @@ function MobileSpeechSettings({
 
 export function MobileDataSettings({
   onOpenSync,
+  onDataChanged,
   onError,
   onNotice,
   onTask,
   clients,
 }: {
   onOpenSync(): void
+  onDataChanged(): void | Promise<void>
   onError(message: string): void
   onNotice(message: string): void
   onTask(task: MobileTask | null): void
@@ -329,14 +333,18 @@ export function MobileDataSettings({
   const confirmImport = () => {
     if (!preview) return
     const selected = preview; setPreview(null)
-    void run('import', async () => { const result = await dataClient.confirmPortableImport(selected.token); onNotice(`恢复完成：新增 ${result.importedPublications ?? 0} 本，合并 ${result.mergedVocabulary ?? 0} 条生词数据。`) })
+    void run('import', async () => {
+      const result = await dataClient.confirmPortableImport(selected.token)
+      await onDataChanged()
+      onNotice(`恢复完成：新增 ${result.importedPublications ?? 0} 本，合并 ${result.mergedVocabulary ?? 0} 条生词数据。`)
+    })
   }
   const discardImport = () => { const selected = preview; setPreview(null); if (selected) void platform.data.discardPortableImport(selected.token).catch((reason) => onError(messageOf(reason))) }
   return <div className="mobile-service-settings mobile-data-settings">
     <EditorialCard className="mobile-service-card">
-      <div className="mobile-service-heading"><div><h2>备份管理</h2><p>便携备份包含刊物的规范化正文与图片、设置、阅读位置、生词、收藏语境和长期学习数据；不包含原始 EPUB、开发模式、密钥、日志或可再生缓存。</p></div><StatusPill tone="success">format v2</StatusPill></div>
+      <div className="mobile-service-heading"><div><h2>备份管理</h2><p>便携备份包含刊物的规范化正文与图片、设置、阅读位置、生词、收藏语境和长期学习数据；不包含原始 EPUB、开发模式、密钥、日志或可再生缓存。</p></div><StatusPill tone="success">format v3</StatusPill></div>
       <div className="mobile-service-actions"><MobileButton variant="primary" disabled={busy !== null} onClick={exportBackup}>{busy === 'export' ? '正在导出…' : '导出便携备份'}</MobileButton><MobileButton disabled={busy !== null} onClick={selectBackup}>{busy === 'select' ? '正在校验…' : '导入便携备份'}</MobileButton></div>
-      <p className="settings-help">仅接受正式 format v2；不会读取 format v1、Demo format v5–v7 或其他旧格式。</p>
+      <p className="settings-help">写出正式 format v3，并可恢复 format v2；不会读取 format v1、Demo format v5–v7 或其他旧格式。</p>
     </EditorialCard>
     <EditorialCard className="mobile-service-card mobile-storage-report">
       <div className="mobile-service-heading"><div><h2>存储空间</h2><p>应用程序、资源、个人数据与缓存的本机占用；统计值可能随运行状态轻微变化。</p></div><MobileButton variant="text" disabled={busy !== null} onClick={() => void run('scan', async () => setReport(await storageClient.scan()), undefined, false)}>{busy === 'scan' ? '扫描中…' : '重新扫描'}</MobileButton></div>
@@ -349,7 +357,7 @@ export function MobileDataSettings({
     <EditorialCard className="mobile-service-card"><div className="mobile-service-heading"><div><h2>跨设备同步</h2><p>发现同一局域网内的 Windows 或 Android 设备，配对后同步解析刊物、阅读位置、生词和学习数据。</p></div><StatusPill tone="success">可用</StatusPill></div><MobileButton variant="primary" disabled={busy !== null} onClick={onOpenSync}>打开跨设备同步</MobileButton></EditorialCard>
     <EditorialCard className="mobile-service-card"><div className="mobile-service-heading"><div><h2>本地数据目录</h2><p>书库、数据库、词典和缓存均保存在 Android 应用私有空间；可在系统页面查看占用或清除数据。</p></div></div><MobileButton disabled={busy !== null} onClick={() => void run('system-storage', () => platform.storage.openAppStorageSettings(), undefined, false)}>打开应用存储设置</MobileButton></EditorialCard>
     <p className="mobile-version-label">外刊阅读器 {appVersion} · Android</p>
-    {preview && <ConfirmDialog title="导入此便携备份？" description={`备份创建于 ${new Date(preview.createdAt).toLocaleString('zh-CN')}，包含 ${preview.publicationCount} 本刊物（新增 ${preview.newPublicationCount} 本）、${preview.vocabularyCount} 个生词和 ${preview.studyPlanCount} 个学习计划。现有数据将按 NewerWins 合并。`} confirmLabel="合并并恢复" onCancel={discardImport} onConfirm={confirmImport} />}
+    {preview && <ConfirmDialog title="导入此便携备份？" description={`备份创建于 ${new Date(preview.createdAt).toLocaleString('zh-CN')}，包含 ${preview.publicationCount} 本刊物（新增 ${preview.newPublicationCount} 本）、${preview.readerRecordCount ?? 0} 条文章记录（位置、标记和保留译文）、${preview.vocabularyCount} 个生词和 ${preview.studyPlanCount} 个学习计划。相同记录保留较新的版本，本机独有数据继续保留。`} confirmLabel="合并并恢复" onCancel={discardImport} onConfirm={confirmImport} />}
     {confirmAi && <ConfirmDialog title="清理 AI 文本缓存？" description="文章译文和 AI 文中义会被删除，之后可联网重新生成。收藏、生词和学习记录不受影响。" confirmLabel="清理缓存" onCancel={() => setConfirmAi(false)} onConfirm={() => { setConfirmAi(false); void run('ai-cache', async () => setReport((await storageClient.clearAiTextCache('CLEAR_AI_TEXT_CACHE')).report), 'AI 文本缓存已清理。', false) }} />}
   </div>
 }
@@ -384,7 +392,7 @@ function MobileDeveloperSettings({
 
 function SettingsCapabilityCard({ section }: { section: Exclude<MobileSettingsSection, 'appearance' | 'dictionary' | 'translation'> }) {
   if (section === 'study') return null
-  return <EditorialCard className="settings-status-card local-product-card"><StatusPill tone="success">本地优先</StatusPill><h2>正式数据基线</h2><p>书库、目录、阅读位置、词典资源、生词和学习进度均保存在应用私有空间。应用不会读取、迁移或删除旧 Demo 数据。</p><dl><div><dt>数据库</dt><dd>schema v2</dd></div><div><dt>内容 ID</dt><dd>v2</dd></div><div><dt>便携备份</dt><dd>format v2</dd></div></dl></EditorialCard>
+  return <EditorialCard className="settings-status-card local-product-card"><StatusPill tone="success">本地优先</StatusPill><h2>正式数据基线</h2><p>书库、目录、阅读位置、词典资源、生词和学习进度均保存在应用私有空间。应用不会读取、迁移或删除旧 Demo 数据。</p><dl><div><dt>数据库</dt><dd>schema v3</dd></div><div><dt>内容 ID</dt><dd>v2</dd></div><div><dt>便携备份</dt><dd>format v3</dd></div></dl></EditorialCard>
 }
 
 function MobileAppearanceSettings({ preferences, onBack, onChange }: { preferences: ReaderPreferences; onBack(): void; onChange(value: ReaderPreferences): void }) {

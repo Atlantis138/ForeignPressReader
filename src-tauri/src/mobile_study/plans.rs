@@ -383,7 +383,9 @@ pub fn delete_plan(
     confirmation_name: &str,
     reset_word_progress: bool,
 ) -> Result<(), PlatformError> {
-    require_debug(database)?;
+    if reset_word_progress {
+        require_debug(database)?;
+    }
     let plan_name = database
         .connection()
         .query_row(

@@ -24,7 +24,7 @@ impl PlatformError {
     pub const fn database_corrupt() -> Self {
         Self::new(
             "databaseCorrupt",
-            "数据库已损坏，必须恢复出厂后重建。",
+            "数据库完整性检查失败。请从备份快照恢复，原文件将保留供后续处理。",
             false,
         )
     }

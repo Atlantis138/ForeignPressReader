@@ -130,6 +130,34 @@ export function replaceTabRoot(state: MobileShellState, tab: PrimaryTab, route: 
   }
 }
 
+/** Drop deep routes whose backing records may have been replaced by sync/import. */
+export function reconcileMobileRoutesAfterDataMerge(state: MobileShellState): MobileShellState {
+  const dictionaryRoot = state.stacks.dictionary.find(
+    (route): route is Extract<MobileRoute, { name: 'dictionary' }> => route.name === 'dictionary',
+  ) ?? rootRoute('dictionary')
+  const dataSensitiveKey = (key: string) => key === 'library'
+    || key.startsWith('publication:')
+    || key.startsWith('article:')
+    || key === 'study'
+    || key.startsWith('study-plan:')
+    || key.startsWith('study-plan-editor:')
+    || key.startsWith('study-today:')
+    || key === 'study-session'
+    || key.startsWith('lexeme:')
+  return {
+    ...state,
+    stacks: {
+      ...state.stacks,
+      library: [rootRoute('library')],
+      dictionary: [dictionaryRoot],
+      study: [rootRoute('study')],
+    },
+    scrollPositions: Object.fromEntries(
+      Object.entries(state.scrollPositions).filter(([key]) => !dataSensitiveKey(key)),
+    ),
+  }
+}
+
 export function popMobileRoute(state: MobileShellState): MobileShellState {
   const stack = state.stacks[state.activeTab]
   if (stack.length <= 1) return state

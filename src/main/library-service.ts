@@ -37,6 +37,7 @@ export class LibraryService {
     let finalRoot: string | null = null
     let stagingRoot: string | null = null
     let parsedHash: string | null = null
+    let ownsFinalRoot = false
     try {
       const stat = await fs.promises.stat(sourceFile)
       if (!stat.isFile()) throw new Error('请选择出版物文件')
@@ -56,8 +57,19 @@ export class LibraryService {
       this.throwIfCancelled(controller)
       const existingId = this.database.findPublicationIdByHash(parsed.hash)
       if (existingId) {
-        this.emit('completed', 1, 1, '出版物已存在')
-        return { publication: this.database.getPublication(existingId), duplicate: true }
+        if (parsed.id !== existingId) throw new Error('相同源文件的刊物身份不一致')
+        // Add missing assets without replacing existing files.
+        const assetsRoot = path.join(this.userDataPath, 'library', existingId, 'assets')
+        for (const [assetPath, data] of parsed.assets) {
+          this.throwIfCancelled(controller)
+          const destination = safeAssetDestination(assetsRoot, assetPath)
+          await fs.promises.mkdir(path.dirname(destination), { recursive: true })
+          try { await fs.promises.writeFile(destination, data, { flag: 'wx' }) }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+        }
+        const repaired = this.database.repairPublication({ ...parsed, assetPaths: [...parsed.assets.keys()] })
+        this.emit('completed', 1, 1, repaired ? '已重新解析并补全刊物' : '已核对原刊物与资源')
+        return { publication: this.database.getPublication(existingId), duplicate: true, repaired }
       }
       const assetBytes = [...parsed.assets.values()].reduce((sum, asset) => sum + asset.byteLength, 0)
       const space = await fs.promises.statfs(this.userDataPath)
@@ -66,6 +78,7 @@ export class LibraryService {
         throw new Error('磁盘空间不足，无法导入 EPUB')
       }
       finalRoot = path.join(this.userDataPath, 'library', parsed.id)
+      if (fs.existsSync(finalRoot)) throw new Error('这本刊物已存在，但文件内容不同。请保留原刊物，另行核对 EPUB 来源。')
       stagingRoot = path.join(this.userDataPath, 'library', '.staging', crypto.randomUUID())
       const assetsRoot = path.join(stagingRoot, 'assets')
       this.emit('writing', 0, Math.max(parsed.assets.size, 1), '正在写入书库')
@@ -80,13 +93,14 @@ export class LibraryService {
       }
       await fs.promises.mkdir(path.dirname(finalRoot), { recursive: true })
       await fs.promises.rename(stagingRoot, finalRoot)
+      ownsFinalRoot = true
       stagingRoot = null
       this.database.savePublication(parsed, format.id)
       this.emit('completed', 1, 1, '导入完成')
       return { publication: this.database.getPublication(parsed.id), duplicate: false }
     } catch (error) {
       if (stagingRoot) await fs.promises.rm(stagingRoot, { recursive: true, force: true })
-      if (finalRoot && (!parsedHash || !this.database.findPublicationIdByHash(parsedHash))) {
+      if (ownsFinalRoot && finalRoot && (!parsedHash || !this.database.findPublicationIdByHash(parsedHash))) {
         await fs.promises.rm(finalRoot, { recursive: true, force: true })
       }
       this.emit(controller.signal.aborted ? 'cancelled' : 'error', 0, 0, error instanceof Error ? error.message : '导入失败')
@@ -141,9 +155,21 @@ export class LibraryService {
     firstImportedAt?: string,
   ): Promise<ImportResult> {
     const existingId = this.database.findPublicationIdByHash(plan.hash)
-    if (existingId) return { publication: this.database.getPublication(existingId), duplicate: true }
+    if (existingId) {
+      if (existingId !== plan.id) throw new Error('刊物内容包身份不一致')
+      const assetsRoot = path.join(this.userDataPath,'library',existingId,'assets')
+      for (const assetPath of plan.assetPaths) {
+        const destination = safeAssetDestination(assetsRoot,assetPath)
+        await fs.promises.mkdir(path.dirname(destination),{recursive:true})
+        try { await fs.promises.copyFile(safeAssetDestination(extractedAssetsRoot,assetPath),destination,fs.constants.COPYFILE_EXCL) }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+      }
+      const repaired = this.database.repairPublication(plan)
+      return { publication: this.database.getPublication(existingId), duplicate: true, repaired }
+    }
     const finalRoot = path.join(this.userDataPath, 'library', plan.id)
     const stagingRoot = path.join(this.userDataPath, 'library', '.staging', crypto.randomUUID())
+    let ownsFinalRoot = false
     try {
       if (fs.existsSync(finalRoot)) throw new Error('刊物身份已存在但内容不同')
       const stagingAssets = path.join(stagingRoot, 'assets')
@@ -158,11 +184,12 @@ export class LibraryService {
       }
       await fs.promises.mkdir(path.dirname(finalRoot), { recursive: true })
       await fs.promises.rename(stagingRoot, finalRoot)
+      ownsFinalRoot = true
       this.database.savePublication({ ...plan, assets: new Map() }, formatId, firstImportedAt)
       return { publication: this.database.getPublication(plan.id), duplicate: false }
     } catch (error) {
       await fs.promises.rm(stagingRoot, { recursive: true, force: true })
-      if (!this.database.findPublicationIdByHash(plan.hash)) {
+      if (ownsFinalRoot && !this.database.findPublicationIdByHash(plan.hash)) {
         await fs.promises.rm(finalRoot, { recursive: true, force: true })
       }
       throw error

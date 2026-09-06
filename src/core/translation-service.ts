@@ -16,7 +16,7 @@ import {
 } from './translation-providers'
 
 export interface TranslationProvider {
-  translateArticle(articleId: string): Promise<TranslationResult>
+  translateArticle(articleId: string, force?: boolean): Promise<TranslationResult>
   cancel(articleId: string): void
 }
 
@@ -55,17 +55,29 @@ export class TranslationService implements TranslationProvider {
     private readonly providers: TranslationProviderRegistry = createDefaultTranslationProviderRegistry(),
   ) {}
 
-  async translateArticle(articleId: string): Promise<TranslationResult> {
+  async translateArticle(articleId: string, force = false): Promise<TranslationResult> {
     if (this.jobs.has(articleId)) throw new Error('该文章正在翻译')
+    const controller = new AbortController()
+    this.jobs.set(articleId, controller)
+    try {
+      return await this.runTranslation(articleId, controller, force)
+    } finally {
+      if (this.jobs.get(articleId) === controller) this.jobs.delete(articleId)
+    }
+  }
+
+  private async runTranslation(articleId: string, controller: AbortController, force: boolean): Promise<TranslationResult> {
     const { provider, model } = this.providers.resolve(this.getPreferences())
     const apiKey = await this.secrets.getApiKey(provider.id)
+    if (controller.signal.aborted) throw new Error('翻译已取消')
     if (!apiKey) throw new Error(`请先在设置中填写 ${provider.name} API Key`)
 
     const cacheModel = translationCacheModel(provider, model)
+    this.database.preserveTranslations?.(articleId)
     const article = this.database.getArticle(articleId)
     const allBlocks = this.database.getTranslatableBlocks(articleId)
     const missing = allBlocks.filter((block) =>
-      !this.database.hasTranslation(
+      force || !this.database.hasTranslation(
         block.id,
         block.sourceHash,
         cacheModel,
@@ -77,8 +89,6 @@ export class TranslationService implements TranslationProvider {
       return { articleId, translated: allBlocks.length, total: allBlocks.length, cached: true }
     }
 
-    const controller = new AbortController()
-    this.jobs.set(articleId, controller)
     let completed = allBlocks.length - missing.length
     this.emitProgress({ articleId, completed, total: allBlocks.length, status: 'started' })
 
@@ -132,6 +142,7 @@ export class TranslationService implements TranslationProvider {
         }
       }
 
+      this.database.preserveTranslations?.(articleId)
       this.emitProgress({ articleId, completed, total: allBlocks.length, status: 'completed' })
       return { articleId, translated: completed, total: allBlocks.length, cached: false }
     } catch (error) {
@@ -142,8 +153,6 @@ export class TranslationService implements TranslationProvider {
       const message = safeErrorMessage(error, provider.name)
       this.emitProgress({ articleId, completed, total: allBlocks.length, status: 'error', message })
       throw new Error(message)
-    } finally {
-      this.jobs.delete(articleId)
     }
   }
 

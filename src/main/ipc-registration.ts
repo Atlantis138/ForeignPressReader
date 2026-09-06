@@ -1,3 +1,4 @@
+import type { ArticleReadingChange, ArticleSearchQuery } from '../shared/reader-types'
 import fs from 'node:fs'
 import path from 'node:path'
 import { dialog, shell, type BrowserWindow, type IpcMain } from 'electron'
@@ -122,6 +123,9 @@ export function registerApplicationIpc(
     assertTrustedSender(event.senderFrame?.url ?? '')
     return db.getPublication(requireId(id))
   })
+  ipcMain.handle('reader:searchArticles', (event, query: ArticleSearchQuery) => { assertTrustedSender(event.senderFrame?.url ?? ''); return db.searchArticles(query) })
+  ipcMain.handle('reader:getReadingData', (event, id: unknown) => { assertTrustedSender(event.senderFrame?.url ?? ''); return db.getReadingData(requireId(id)) })
+  ipcMain.handle('reader:changeReadingData', (event, id: unknown, change: ArticleReadingChange) => { assertTrustedSender(event.senderFrame?.url ?? ''); return db.changeReadingData(requireId(id), change) })
   ipcMain.handle('reader:getArticle', (event, id: unknown) => {
     assertTrustedSender(event.senderFrame?.url ?? '')
     return db.getArticle(requireId(id))
@@ -174,9 +178,10 @@ export function registerApplicationIpc(
     assertTrustedSender(event.senderFrame?.url ?? '')
     return speechSynthesis.synthesize(requireSpeechSynthesisRequest(input, speechProviders))
   })
-  ipcMain.handle('translation:translateArticle', (event, articleId: unknown) => {
+  ipcMain.handle('translation:translateArticle', (event, articleId: unknown, force: unknown = false) => {
     assertTrustedSender(event.senderFrame?.url ?? '')
-    return translator.translateArticle(requireId(articleId))
+    if (typeof force !== 'boolean') throw new Error('翻译选项无效')
+    return translator.translateArticle(requireId(articleId), force)
   })
   ipcMain.handle('translation:cancel', (event, articleId: unknown) => {
     assertTrustedSender(event.senderFrame?.url ?? '')
@@ -416,6 +421,7 @@ export function registerApplicationIpc(
   ipcMain.handle('sync:confirmPairing', (event, sessionId: unknown) => { assertTrustedSender(event.senderFrame?.url ?? ''); return lanSync.confirmPairing(requireId(sessionId)) })
   ipcMain.handle('sync:rejectPairing', (event, sessionId: unknown) => { assertTrustedSender(event.senderFrame?.url ?? ''); return lanSync.rejectPairing(requireId(sessionId)) })
   ipcMain.handle('sync:sendTo', (event, deviceId: unknown) => { assertTrustedSender(event.senderFrame?.url ?? ''); return lanSync.sendTo(requireId(deviceId)) })
+  ipcMain.handle('sync:getIncomingChanges', (event, transferId: unknown, offset: number, limit: number) => { assertTrustedSender(event.senderFrame?.url ?? ''); return lanSync.getIncomingChanges(requireId(transferId), offset, limit) })
   ipcMain.handle('sync:acceptIncoming', (event, transferId: unknown) => { assertTrustedSender(event.senderFrame?.url ?? ''); return lanSync.acceptIncoming(requireId(transferId)) })
   ipcMain.handle('sync:rejectIncoming', (event, transferId: unknown) => { assertTrustedSender(event.senderFrame?.url ?? ''); return lanSync.rejectIncoming(requireId(transferId)) })
   ipcMain.handle('sync:cancelOperation', (event) => { assertTrustedSender(event.senderFrame?.url ?? ''); return lanSync.cancelOperation() })

@@ -16,17 +16,18 @@ afterEach(() => {
 })
 
 describe('formal schema migrations', () => {
-  it('creates v2 while preserving the immutable formal-v1 baseline', async () => {
+  it('creates v4 while preserving the immutable formal-v1 baseline', async () => {
     const root = temporaryRoot()
     const database = await SqliteApplicationRepository.open(root, '1.0.0-alpha.1-test')
     const connection = database.getConnection()
 
     expect(SCHEMA_GENERATION).toBe('formal-v1')
-    expect(LATEST_SCHEMA_VERSION).toBe(2)
-    expect(MIGRATIONS).toHaveLength(2)
+    expect(LATEST_SCHEMA_VERSION).toBe(4)
+    expect(MIGRATIONS).toHaveLength(4)
     expect(MIGRATIONS[0]).toMatchObject({ version: 1, name: 'formal-v1' })
     expect(MIGRATIONS[1]).toMatchObject({ version: 2, name: 'parsed-publication-storage' })
-    expect(connection.prepare('PRAGMA user_version').get()).toEqual({ user_version: 2 })
+    expect(MIGRATIONS[2]).toMatchObject({ version: 3, name: 'fine-grained-library-sync' })
+    expect(connection.prepare('PRAGMA user_version').get()).toEqual({ user_version: 4 })
     expect(connection.prepare('SELECT version,name,app_version FROM migration_history').all()).toEqual([{
       version: 1,
       name: 'formal-v1',
@@ -35,7 +36,11 @@ describe('formal schema migrations', () => {
       version: 2,
       name: 'parsed-publication-storage',
       app_version: '1.0.0-alpha.1-test',
-    }])
+    }, {
+      version: 3,
+      name: 'fine-grained-library-sync',
+      app_version: '1.0.0-alpha.1-test',
+    }, { version: 4, name: 'reader-records', app_version: '1.0.0-alpha.1-test' }])
     expect(connection.prepare("SELECT value FROM app_metadata WHERE key='schema_generation'").get()).toEqual({
       value: 'formal-v1',
     })
@@ -69,6 +74,7 @@ describe('formal schema migrations', () => {
     expect(connection.prepare('PRAGMA quick_check').get()).toEqual({ quick_check: 'ok' })
 
     const trackedTables = [
+      'reader_records',
       'publication_lifecycle', 'settings', 'reading_positions', 'user_lexemes', 'lexeme_examples',
       'vocabulary_sources', 'saved_contexts', 'study_plans', 'study_plan_sources',
       'study_plan_lexeme_origins', 'study_plan_exclusions', 'scheduler_profiles',
@@ -114,7 +120,7 @@ describe('formal schema migrations', () => {
     future.exec(`
       CREATE TABLE future_marker (value TEXT NOT NULL);
       INSERT INTO future_marker VALUES ('untouched');
-      PRAGMA user_version=3;
+      PRAGMA user_version=99;
     `)
     future.close()
     const before = fileHash(file)
@@ -123,7 +129,7 @@ describe('formal schema migrations', () => {
     expect(fileHash(file)).toBe(before)
 
     const verification = new DatabaseSync(file, { readOnly: true })
-    expect(verification.prepare('PRAGMA user_version').get()).toEqual({ user_version: 3 })
+    expect(verification.prepare('PRAGMA user_version').get()).toEqual({ user_version: 99 })
     expect(verification.prepare('SELECT value FROM future_marker').get()).toEqual({ value: 'untouched' })
     verification.close()
   })
@@ -197,10 +203,38 @@ describe('formal schema migrations', () => {
       current_revision: beforeExcludedWrites,
     })
 
-    expect(beforeExcludedWrites).toBe(7)
-    expect(db.prepare("SELECT revision FROM sync_entity_revisions WHERE entity_type='settings' AND entity_key='reader.preferences'").get()).toEqual({ revision: 4 })
+    db.prepare('INSERT INTO settings VALUES (?,?,?,?)').run(
+      'library.management',
+      JSON.stringify({ categories: [], items: {}, viewMode: 'grid' }),
+      now,
+      deviceId,
+    )
+    expect(db.prepare('SELECT current_revision FROM sync_clock').get()).toEqual({
+      current_revision: beforeExcludedWrites,
+    })
+    const categoryId = `category_${'a'.repeat(32)}`
+    db.prepare('INSERT INTO settings VALUES (?,?,?,?)').run(
+      `library.category.${categoryId}`,
+      JSON.stringify({
+        id: categoryId,
+        name: 'Tracked category',
+        createdAt: now,
+        state: 'present',
+        deletedAt: null,
+      }),
+      now,
+      deviceId,
+    )
+    expect(db.prepare('SELECT current_revision FROM sync_clock').get()).toEqual({
+      current_revision: beforeExcludedWrites + 1,
+    })
+
+    expect(beforeExcludedWrites).toBe(8)
+    expect(db.prepare("SELECT revision FROM sync_entity_revisions WHERE entity_type='settings' AND entity_key='reader.preferences'").get()).toEqual({ revision: 5 })
     expect(db.prepare("SELECT 1 AS present FROM sync_entity_revisions WHERE entity_type='settings' AND entity_key='study.developer-mode'").get()).toBeUndefined()
-    expect(db.prepare("SELECT revision FROM sync_entity_revisions WHERE entity_type='study_plan_exclusions' AND entity_key=?").get(`plan_track\u001flex_track`)).toEqual({ revision: 7 })
+    expect(db.prepare("SELECT revision FROM sync_entity_revisions WHERE entity_type='study_plan_exclusions' AND entity_key=?").get(`plan_track\u001flex_track`)).toEqual({ revision: 8 })
+    expect(db.prepare("SELECT 1 AS present FROM sync_entity_revisions WHERE entity_type='settings' AND entity_key='library.management'").get()).toBeUndefined()
+    expect(db.prepare("SELECT revision FROM sync_entity_revisions WHERE entity_type='settings' AND entity_key=?").get(`library.category.${categoryId}`)).toEqual({ revision: 9 })
     expect(db.prepare("SELECT COUNT(*) AS count FROM sync_entity_revisions WHERE entity_type IN ('translations','context_definitions','study_sessions')").get()).toEqual({ count: 0 })
     database.close()
   })
@@ -232,7 +266,7 @@ describe('formal schema migrations', () => {
     empty.close()
 
     const database = await SqliteApplicationRepository.open(root, '1.0.0-alpha.1-test')
-    expect(database.getSchemaStatus().schemaVersion).toBe(2)
+    expect(database.getSchemaStatus().schemaVersion).toBe(4)
     database.close()
   })
 
@@ -256,7 +290,7 @@ describe('formal schema migrations', () => {
     verification.close()
   })
 
-  it('upgrades v1 rows to retained state and rolls migration 2 back atomically', async () => {
+  it('upgrades v1 rows through v3 and rolls a failed migration 2 back atomically', async () => {
     for (const fail of [false, true]) {
       const root = temporaryRoot()
       const file = path.join(root, 'reader.sqlite')
@@ -282,7 +316,7 @@ describe('formal schema migrations', () => {
         if (fail) await expect(SqliteApplicationRepository.open(root, 'v2')).rejects.toThrow('migration 2 failure')
         else {
           const database = await SqliteApplicationRepository.open(root, 'v2')
-          expect(database.getSchemaStatus().schemaVersion).toBe(2)
+          expect(database.getSchemaStatus().schemaVersion).toBe(4)
           expect(database.getConnection().prepare('SELECT source_storage FROM publications').get()).toEqual({ source_storage: 'retained' })
           database.close()
         }
@@ -291,9 +325,60 @@ describe('formal schema migrations', () => {
       }
 
       const verification = new DatabaseSync(file, { readOnly: true })
-      expect(verification.prepare('PRAGMA user_version').get()).toEqual({ user_version: fail ? 1 : 2 })
+      expect(verification.prepare('PRAGMA user_version').get()).toEqual({ user_version: fail ? 1 : 4 })
       if (fail) expect(() => verification.prepare('SELECT source_storage FROM publications')).toThrow()
       else expect(verification.prepare('SELECT COUNT(*) AS count FROM migration_history WHERE version=2').get()).toEqual({ count: 1 })
+      verification.close()
+    }
+  })
+
+  it('seeds fine-grained library records from v2 and rolls migration 3 back atomically', async () => {
+    for (const fail of [false, true]) {
+      const root = temporaryRoot()
+      const file = path.join(root, 'reader.sqlite')
+      const v2 = new DatabaseSync(file)
+      MIGRATIONS[0].up(v2)
+      MIGRATIONS[1].up(v2)
+      const categoryId = `category_${'a'.repeat(32)}`
+      const publicationId = 'pub_aaaaaaaaaaaaaaaaaaaaaaaa'
+      v2.prepare('INSERT INTO migration_history(version,name,applied_at,app_version) VALUES(1,?,?,?)')
+        .run('formal-v1', '2026-07-15T00:00:00.000Z', 'v1')
+      v2.prepare('INSERT INTO migration_history(version,name,applied_at,app_version) VALUES(2,?,?,?)')
+        .run('parsed-publication-storage', '2026-07-15T00:00:01.000Z', 'v2')
+      v2.prepare('INSERT INTO settings(key,value,updated_at,device_id) VALUES(?,?,?,?)').run(
+        'library.management',
+        JSON.stringify({
+          viewMode: 'grid', sortBy: 'importedAt', sortDirection: 'desc', activeCategoryId: categoryId,
+          categories: [{ id: categoryId, name: '迁移分类', createdAt: '2026-07-15T00:00:00.000Z' }],
+          items: { [publicationId]: { customTitle: '迁移刊名', categoryId } },
+        }),
+        '2026-07-15T00:00:02.000Z',
+        'device-v2',
+      )
+      v2.exec('PRAGMA user_version=2')
+      v2.close()
+
+      const original = MIGRATIONS[2].up
+      if (fail) MIGRATIONS[2].up = (database) => { original(database); throw new Error('migration 3 failure') }
+      try {
+        if (fail) await expect(SqliteApplicationRepository.open(root, 'v3')).rejects.toThrow('migration 3 failure')
+        else {
+          const database = await SqliteApplicationRepository.open(root, 'v3')
+          expect(database.getSchemaStatus().schemaVersion).toBe(4)
+          expect(database.getConnection().prepare("SELECT key FROM settings WHERE key LIKE 'library.category.%'").get())
+            .toEqual({ key: `library.category.${categoryId}` })
+          expect(database.getConnection().prepare("SELECT key FROM settings WHERE key LIKE 'library.item.%'").get())
+            .toEqual({ key: `library.item.${publicationId}` })
+          database.close()
+        }
+      } finally {
+        MIGRATIONS[2].up = original
+      }
+
+      const verification = new DatabaseSync(file, { readOnly: true })
+      expect(verification.prepare('PRAGMA user_version').get()).toEqual({ user_version: fail ? 2 : 4 })
+      expect(verification.prepare("SELECT COUNT(*) count FROM settings WHERE key LIKE 'library.category.%' OR key LIKE 'library.item.%'").get())
+        .toEqual({ count: fail ? 0 : 2 })
       verification.close()
     }
   })

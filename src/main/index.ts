@@ -1,3 +1,4 @@
+import { listRecoverySnapshots, restoreStartupSnapshot } from './startup-recovery'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -11,6 +12,7 @@ import {
   ipcMain as electronIpcMain,
   net,
   protocol,
+  shell,
 } from 'electron'
 import type {
   DictionaryInstallProgress,
@@ -138,6 +140,16 @@ async function bootstrap(): Promise<void> {
       void diagnosticLogger?.log('error', 'renderer', 'process-gone', {
         reason: details.reason, exitCode: details.exitCode,
       })
+      if (details.reason !== 'clean-exit' && mainWindow && !mainWindow.isDestroyed()) {
+        void dialog.showMessageBox(mainWindow, {
+          type: 'error', title: '页面已停止运行',
+          message: '阅读页面意外关闭，已保存的数据仍保留在本机。',
+          buttons: ['重新加载', '关闭应用'], defaultId: 0, cancelId: 1,
+        }).then(({ response }) => {
+          if (response === 0 && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload()
+          else app.quit()
+        })
+      }
     },
     onUnresponsive: () => { void diagnosticLogger?.log('warn', 'renderer', 'unresponsive') },
   })
@@ -213,8 +225,26 @@ function emitDataProgress(progress: DataTransferProgress): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('data:progress', progress)
 }
 
-app.whenReady().then(bootstrap).catch((error) => {
-  dialog.showErrorBox('启动失败', error instanceof Error ? error.message : '应用无法启动')
+app.whenReady().then(bootstrap).catch(async (error) => {
+  const message = error instanceof Error ? error.message : '应用无法启动'
+  if (!database && !/Demo|旧版数据库|架构代次/.test(message)) {
+    const userDataPath = app.getPath('userData')
+    for (;;) {
+      const response = await dialog.showMessageBox({ type: 'error', title: '无法打开阅读数据', message,
+        detail: '可选择正式版数据库快照恢复。恢复前会验证快照；当前数据库及其日志会另外保存，刊物文件会保留。',
+        buttons: ['选择备份恢复', '打开数据目录', '退出'], defaultId: 0, cancelId: 2 })
+      if (response.response === 2) break
+      if (response.response === 1) { await shell.openPath(userDataPath); continue }
+      const snapshots = listRecoverySnapshots(userDataPath)
+      const selection = await dialog.showOpenDialog({ title: '选择正式版数据库快照', defaultPath: snapshots[0]?.path ?? path.join(userDataPath,'backups','migrations'), filters: [{ name: 'SQLite 数据库快照', extensions: ['sqlite'] }], properties: ['openFile'] })
+      if (selection.canceled || !selection.filePaths[0]) continue
+      try {
+        const preserved = await restoreStartupSnapshot(userDataPath,selection.filePaths[0],app.getVersion())
+        await dialog.showMessageBox({ type: 'info', message: '备份已恢复，即将重新启动', detail: '原始数据库已保存在：'+preserved, buttons: ['重新启动'] })
+        app.relaunch(); app.quit(); return
+      } catch (reason) { dialog.showErrorBox('未能恢复备份',reason instanceof Error ? reason.message : '恢复失败，原数据已保留') }
+    }
+  } else dialog.showErrorBox('启动失败', message)
   app.quit()
 })
 

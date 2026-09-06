@@ -1,3 +1,4 @@
+import { useDialogFocus } from '../ui/use-dialog-focus'
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode, RefObject } from 'react'
 import {
   AppearanceIcon,
@@ -147,7 +148,8 @@ export function Skeleton({ lines = 3 }: { lines?: number }) {
 }
 
 export function BottomSheet({ title, onClose, children }: { title: string; onClose(): void; children: ReactNode }) {
-  return <div className="sheet-backdrop" onClick={onClose}><section className="mobile-bottom-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
+  const dialogRef = useDialogFocus(onClose)
+  return <div className="sheet-backdrop" onClick={onClose}><section ref={dialogRef} tabIndex={-1} className="mobile-bottom-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
     <header><span /><h2>{title}</h2><MobileButton variant="text" onClick={onClose}>完成</MobileButton></header>
     {children}
   </section></div>
@@ -166,15 +168,18 @@ export function PaginationFooter({ offset, limit, total, onPrevious, onNext }: {
 }
 
 export function SideSheet({ title, onClose, children }: { title: string; onClose(): void; children: ReactNode }) {
-  return <div className="sheet-backdrop mobile-side-sheet-backdrop" onClick={onClose}><section className="mobile-side-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}><TopAppBar title={title} onBack={onClose} />{children}</section></div>
+  const dialogRef = useDialogFocus(onClose)
+  return <div className="sheet-backdrop mobile-side-sheet-backdrop" onClick={onClose}><section ref={dialogRef} tabIndex={-1} className="mobile-side-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}><TopAppBar title={title} onBack={onClose} />{children}</section></div>
 }
 
 export function FullScreenDialog({ title, onClose, children }: { title: string; onClose(): void; children: ReactNode }) {
-  return <section className="mobile-fullscreen-dialog" role="dialog" aria-modal="true" aria-label={title}><TopAppBar title={title} onBack={onClose} />{children}</section>
+  const dialogRef = useDialogFocus(onClose)
+  return <section ref={dialogRef} tabIndex={-1} className="mobile-fullscreen-dialog" role="dialog" aria-modal="true" aria-label={title}><TopAppBar title={title} onBack={onClose} />{children}</section>
 }
 
 export function ConfirmDialog({ title, description, confirmLabel, cancelLabel = '取消', onConfirm, onCancel }: { title: string; description: string; confirmLabel: string; cancelLabel?: string; onConfirm(): void; onCancel(): void }) {
-  return <div className="mobile-dialog-backdrop" onClick={onCancel}><section className="mobile-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="mobile-confirm-title" onClick={(event) => event.stopPropagation()}>
+  const dialogRef = useDialogFocus(onCancel)
+  return <div className="mobile-dialog-backdrop" onClick={onCancel}><section ref={dialogRef} tabIndex={-1} className="mobile-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="mobile-confirm-title" onClick={(event) => event.stopPropagation()}>
     <div className="mobile-confirm-icon"><AppearanceIcon /></div><h2 id="mobile-confirm-title">{title}</h2><p>{description}</p>
     <div><MobileButton onClick={onCancel}>{cancelLabel}</MobileButton><MobileButton variant="primary" onClick={onConfirm}>{confirmLabel}</MobileButton></div>
   </section></div>

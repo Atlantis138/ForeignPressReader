@@ -38,7 +38,7 @@ export function validatePublicationPackageManifest(value: unknown): PublicationP
   if (typeof manifest.firstImportedAt !== 'string' || !isTimestamp(manifest.firstImportedAt)) {
     throw new Error('刊物包首次导入时间无效')
   }
-  if (typeof manifest.publicationId !== 'string' || !manifest.publicationId
+  if (!isSafePublicationId(manifest.publicationId)
     || typeof manifest.sourceContentSha256 !== 'string'
     || !/^[a-f0-9]{64}$/.test(manifest.sourceContentSha256)
     || typeof manifest.sourceFormat !== 'string' || !/^[a-z0-9][a-z0-9-]*$/i.test(manifest.sourceFormat)
@@ -66,7 +66,7 @@ export function validateParsedPublicationPlan(value: unknown): ParsedPublication
   if (!hasExactKeys(plan, [
     'id', 'hash', 'sourceKey', 'profileId', 'title', 'creator', 'language', 'coverPath',
     'sections', 'unsectionedArticles', 'assetPaths',
-  ]) || typeof plan.id !== 'string' || !plan.id || typeof plan.hash !== 'string'
+  ]) || !isSafePublicationId(plan.id) || typeof plan.hash !== 'string'
     || !/^[a-f0-9]{64}$/.test(plan.hash) || typeof plan.sourceKey !== 'string' || !plan.sourceKey
     || typeof plan.profileId !== 'string' || !plan.profileId || typeof plan.title !== 'string'
     || !plan.title || !Array.isArray(plan.sections) || !Array.isArray(plan.unsectionedArticles)
@@ -128,6 +128,11 @@ export function validateParsedPublicationPlan(value: unknown): ParsedPublication
 export function isAssetPath(value: string): boolean {
   return typeof value === 'string' && value.length > 0 && !value.startsWith('/') && !value.includes('\\')
     && value.split('/').every((part) => part !== '' && part !== '.' && part !== '..')
+}
+
+/** Publication IDs may become directory names during restore and deletion. */
+export function isSafePublicationId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(value)
 }
 
 function isPackagePath(value: string): boolean {

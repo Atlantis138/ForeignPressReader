@@ -19,7 +19,7 @@
   },
   "main": "dist-electron/main/index.js",
   "scripts": {
-    "dev": "concurrently -k \"pnpm dev:renderer\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "dev": "concurrently -k \"pnpm dev:renderer\" \"node scripts/dev-electron.mjs\"",
     "dev:renderer": "vite",
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
@@ -38,7 +38,9 @@
     "tauri": "tauri",
     "tauri:android:init": "tauri android init",
     "tauri:android:dev": "tauri android dev --host 127.0.0.1",
-    "tauri:android:build": "tauri android build --config src-tauri/tauri.release.conf.json --target aarch64 --split-per-abi --apk --ci"
+    "tauri:android:build": "tauri android build --config src-tauri/tauri.release.conf.json --target aarch64 --split-per-abi --apk --ci",
+    "test:unit": "pnpm build:electron && vitest run --exclude tests/electron-ui.test.ts",
+    "test:protocol:built": "node scripts/protocol-smoke.mjs --source"
   },
   "dependencies": {
     "@noble/hashes": "2.2.0",

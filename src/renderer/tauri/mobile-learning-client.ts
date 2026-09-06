@@ -316,6 +316,7 @@ export class TauriMobileStudyClient implements MobileStudyManagementClient {
 
   getDashboard(): Promise<StudyDashboard> { return this.dashboardCache.get(() => this.call('get_mobile_study_dashboard')) }
   peekDashboard(): StudyDashboard | undefined { return this.dashboardCache.peek() }
+  invalidateCachedData(): void { this.dashboardCache.invalidate() }
   listPlans(includeArchived = false): Promise<StudyPlanSummary[]> { return this.call('list_mobile_study_plans', { includeArchived }) }
   createPlan(input: StudyPlanInput): Promise<StudyPlanDetail> { return this.mutate(() => this.call('create_mobile_study_plan', { input })) }
   updatePlan(planId: string, input: StudyPlanInput): Promise<StudyPlanDetail> { return this.mutate(() => this.call('update_mobile_study_plan', { planId, input })) }

@@ -10,6 +10,7 @@ import {
   parseMobileShellState,
   popMobileRoute,
   pushMobileRoute,
+  reconcileMobileRoutesAfterDataMerge,
   replaceTabRoot,
   selectPrimaryTab,
   serializeMobileShellState,
@@ -151,6 +152,26 @@ describe('Android Alpha mobile shell model', () => {
 
     expect(mobileDictionarySearchQuery(state)).toMatchObject({ text: 'second', offset: 0 })
     expect(mobileVocabularyListQuery(state)).toEqual({ text: 'saved', offset: 50, limit: 50 })
+  })
+
+  it('drops data-backed deep routes after an incoming merge while keeping settings open', () => {
+    let state = createDefaultMobileShellState()
+    state = pushMobileRoute(state, { name: 'article', publicationId: 'publication-1', articleId: 'article-1' })
+    state = replaceTabRoot(state, 'dictionary', { name: 'dictionary', mode: 'vocabulary' })
+    state = pushMobileRoute(state, { name: 'lexeme', lexemeKey: 'lexeme-1', hostTab: 'dictionary' })
+    state = pushMobileRoute(state, { name: 'study-plan', planId: 'plan-1' })
+    state = pushMobileRoute(state, { name: 'settings-section', section: 'sync' })
+    state = setMobileScroll(state, 'article:publication-1:article-1', 120)
+    state = setMobileScroll(state, 'lexeme:dictionary:lexeme-1', 60)
+    state = setMobileScroll(state, 'study-plan:plan-1', 80)
+    state = setMobileScroll(state, 'dictionary:vocabulary', 40)
+
+    const reconciled = reconcileMobileRoutesAfterDataMerge(state)
+    expect(activeRoute(reconciled)).toEqual({ name: 'settings-section', section: 'sync' })
+    expect(reconciled.stacks.library).toEqual([{ name: 'library' }])
+    expect(reconciled.stacks.dictionary).toEqual([{ name: 'dictionary', mode: 'vocabulary' }])
+    expect(reconciled.stacks.study).toEqual([{ name: 'study' }])
+    expect(reconciled.scrollPositions).toEqual({ 'dictionary:vocabulary': 40 })
   })
 
   it('rejects corrupt, unknown and unsafe persisted state', () => {

@@ -172,7 +172,7 @@ pub fn play(
     play_file(app, &request_id, &file, &request.usage)
 }
 
-fn synthesize(
+pub(crate) fn synthesize(
     app: &AppHandle,
     paths: &PlatformPaths,
     request: &SpeechPlayRequest,
@@ -395,7 +395,7 @@ fn test_request(provider_id: &str) -> Result<SpeechPlayRequest, PlatformError> {
         }
     })
 }
-fn validate_play(value: &SpeechPlayRequest) -> Result<(), PlatformError> {
+pub(crate) fn validate_play(value: &SpeechPlayRequest) -> Result<(), PlatformError> {
     let provider_valid = match value.provider_id.as_str() {
         "system" => value.model_id.len() <= 64 && value.voice_id.chars().count() <= 500,
         "google" => {

@@ -3,9 +3,10 @@ import type {
   PublicationPackageBlobRefV2,
   SyncApplyResult,
   SyncBatchMode,
-  SyncBatchV2,
+  SyncBatchV4,
   SyncEntityRef,
 } from './sync-model'
+import { SYNC_MODEL_VERSION } from './sync-model'
 import { sha256Hex } from './sha256'
 
 export const LAN_SYNC_PROTOCOL = 'foreign-press-reader-sync' as const
@@ -53,7 +54,7 @@ export type LanSyncPlatform = 'windows' | 'android'
 export interface LanSyncVerifiedDiscoveryRecordV2 {
   protocol: typeof LAN_SYNC_PROTOCOL
   wireVersion: typeof LAN_SYNC_WIRE_VERSION
-  modelVersion: 2
+  modelVersion: typeof SYNC_MODEL_VERSION
   deviceId: string
   name: string
   platform: LanSyncPlatform
@@ -81,7 +82,7 @@ export interface LanSyncDiscoveryAnnouncementV2 {
   platform: LanSyncPlatform
   port: typeof LAN_SYNC_PORT
   wireVersions: readonly [2]
-  modelVersion: 2
+  modelVersion: typeof SYNC_MODEL_VERSION
   certificateSha256: string
 }
 
@@ -89,7 +90,7 @@ export interface LanSyncInfoResponseV2 extends LanSyncPeerIdentity {
   protocol: typeof LAN_SYNC_PROTOCOL
   wireVersion: typeof LAN_SYNC_WIRE_VERSION
   wireVersions: readonly [2]
-  modelVersion: 2
+  modelVersion: typeof SYNC_MODEL_VERSION
   port: typeof LAN_SYNC_PORT
 }
 
@@ -114,7 +115,7 @@ export interface LanSyncSummaryPageV2 {
 export interface LanSyncBatchHeaderLineV2 {
   kind: 'header'
   streamVersion: typeof LAN_SYNC_BATCH_STREAM_VERSION
-  modelVersion: 2
+  modelVersion: typeof SYNC_MODEL_VERSION
   batchId: string
   senderDeviceId: string
   recipientDeviceId: string
@@ -288,7 +289,7 @@ export function isLanSyncDiscoveryAnnouncementV2(value: unknown): value is LanSy
     && item.port === LAN_SYNC_PORT
     && Array.isArray(item.wireVersions)
     && item.wireVersions.length === 1 && item.wireVersions[0] === 2
-    && item.modelVersion === 2
+    && item.modelVersion === SYNC_MODEL_VERSION
     && typeof item.certificateSha256 === 'string' && /^[a-f0-9]{64}$/i.test(item.certificateSha256)
 }
 
@@ -303,7 +304,7 @@ export function parseLanSyncBatchLineV2(line: string): LanSyncBatchLineV2 {
   }
   const item = value as Record<string, unknown>
   if (item.kind === 'header') {
-    if (item.streamVersion !== LAN_SYNC_BATCH_STREAM_VERSION || item.modelVersion !== 2
+    if (item.streamVersion !== LAN_SYNC_BATCH_STREAM_VERSION || item.modelVersion !== SYNC_MODEL_VERSION
       || typeof item.batchId !== 'string' || typeof item.senderDeviceId !== 'string'
       || typeof item.recipientDeviceId !== 'string' || typeof item.createdAt !== 'string'
       || (item.mode !== 'snapshot' && item.mode !== 'incremental')
@@ -324,11 +325,11 @@ export function parseLanSyncBatchLineV2(line: string): LanSyncBatchLineV2 {
   throw new Error('同步批次行类型无效')
 }
 
-export function createLanSyncBatchHeaderV2(batch: SyncBatchV2): LanSyncBatchHeaderLineV2 {
+export function createLanSyncBatchHeaderV2(batch: SyncBatchV4): LanSyncBatchHeaderLineV2 {
   return {
     kind: 'header',
     streamVersion: LAN_SYNC_BATCH_STREAM_VERSION,
-    modelVersion: 2,
+    modelVersion: SYNC_MODEL_VERSION,
     batchId: batch.batchId,
     senderDeviceId: batch.senderDeviceId,
     recipientDeviceId: batch.recipientDeviceId,
@@ -342,7 +343,7 @@ export function createLanSyncBatchHeaderV2(batch: SyncBatchV2): LanSyncBatchHead
   }
 }
 
-export function* serializeLanSyncBatchV2(batch: SyncBatchV2): Generator<string> {
+export function* serializeLanSyncBatchV2(batch: SyncBatchV4): Generator<string> {
   if (batch.records.length > LAN_SYNC_LIMITS.records || batch.blobs.length > LAN_SYNC_LIMITS.blobs) {
     throw new Error('同步批次数量超出限制')
   }

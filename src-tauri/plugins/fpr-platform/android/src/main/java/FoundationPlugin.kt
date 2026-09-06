@@ -795,19 +795,44 @@ class FoundationPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @Command
+    fun startSpeechQueue(invoke: Invoke) {
+        val args = try { invoke.parseArgs(SpeechQueueArgs::class.java) } catch (_: Throwable) { return invoke.reject("Invalid speech queue", "invalidInput") }
+        val valid = runCatching { args.sessionId.matches(Regex("^[a-f0-9-]{36}$", RegexOption.IGNORE_CASE)) && args.sourceId.length in 1..200 && args.title.length <= 200 && args.providerId in setOf("system","google","minimax") && args.locale in setOf("en-US","en-GB") && args.rate in 0.5f..2.0f && args.items.size in 1..10000 && args.startIndex in args.items.indices && args.items.sumOf { it.text.length.toLong() } <= 2_000_000 && args.items.all { it.text.isNotBlank() && it.text.length <= 4000 && it.id.length in 1..250 && it.blockId.length in 1..100 } }.getOrDefault(false)
+        if (!valid) return invoke.reject("Invalid speech queue", "invalidInput")
+        speechBridge.stop()
+        activity.runOnUiThread { FoundationPlaybackService.start(activity.applicationContext,args,invoke) }
+    }
+    @Command
+    fun getSpeechQueueState(invoke: Invoke) { invoke.resolve(FoundationPlaybackService.lastState) }
+    @Command
+    fun supplySpeechQueueAudio(invoke: Invoke) {
+        val args = try { invoke.parseArgs(SpeechQueueAudioArgs::class.java) } catch (_: Throwable) { return invoke.reject("Invalid speech audio", "invalidInput") }
+        val file = runCatching { File(args.path).canonicalFile }.getOrNull()
+        if (file == null || !file.isFile || !file.path.startsWith(activity.cacheDir.canonicalPath + File.separator) || file.length() > 16 * 1024 * 1024) return invoke.reject("Invalid speech audio", "invalidInput")
+        activity.runOnUiThread { FoundationPlaybackService.active?.supply(args); invoke.resolve() }
+    }
+    @Command
+    fun controlSpeechQueue(invoke: Invoke) {
+        val args = try { invoke.parseArgs(SpeechQueueControlArgs::class.java) } catch (_: Throwable) { return invoke.reject("Invalid playback control", "invalidInput") }
+        if (args.action !in setOf("pause","resume","stop","seek","error")) return invoke.reject("Invalid playback control", "invalidInput")
+        activity.runOnUiThread { FoundationPlaybackService.active?.control(args); invoke.resolve() }
+    }
+    @Command
     fun pauseSpeech(invoke: Invoke) {
+        if (FoundationPlaybackService.active != null) { activity.runOnUiThread { FoundationPlaybackService.active?.control(SpeechQueueControlArgs().apply { action="pause" }); invoke.resolve() }; return }
         speechBridge.pause(invoke)
     }
 
     @Command
     fun resumeSpeech(invoke: Invoke) {
+        if (FoundationPlaybackService.active != null) { activity.runOnUiThread { FoundationPlaybackService.active?.control(SpeechQueueControlArgs().apply { action="resume" }); invoke.resolve() }; return }
         speechBridge.resume(invoke)
     }
 
     @Command
     fun stopSpeech(invoke: Invoke) {
         speechBridge.stop()
-        invoke.resolve()
+        activity.runOnUiThread { FoundationPlaybackService.active?.control(SpeechQueueControlArgs().apply { action="stop" }); invoke.resolve() }
     }
 
     @Command
@@ -835,7 +860,7 @@ class FoundationPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     override fun onStop() {
-        speechBridge.stop()
+        speechBridge.release()
         discoveryBridge.stop()
     }
 

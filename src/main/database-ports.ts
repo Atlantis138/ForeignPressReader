@@ -20,6 +20,8 @@ export type PortableDataRepository = Pick<SqliteApplicationRepository,
 >
 
 export type SyncDataRepository = Pick<SqliteApplicationRepository,
+  | 'getArticleTitle'
+  | 'getPublicationContentHash'
   | 'applyIncomingSyncData'
   | 'clearPublicationLifecycleForRestore'
   | 'exportPortableUserData'

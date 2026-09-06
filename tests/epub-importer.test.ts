@@ -25,6 +25,47 @@ afterEach(() => {
 })
 
 describe('EpubImporter', () => {
+  it.each(['<p>Short news matters.</p>', '<div>Div <em>prose</em> survives.</div>',
+    '<p>Intro.</p><table><tr><th>Country</th><td>Japan</td></tr></table>'])('preserves short and non-paragraph prose: %s', async body => {
+    const zip = await JSZip.loadAsync(await syntheticEpub())
+    const document = Object.keys(zip.files).find(name => /article.*\.xhtml$/.test(name))!
+    expect(document).toBeTruthy()
+    zip.file(document, `<html><head><title>News</title></head><body><h1>News</h1>${body}</body></html>`)
+    const plan = await new EpubImporter().parse(await zip.generateAsync({ type: 'nodebuffer' }))
+    const article = [...plan.unsectionedArticles, ...plan.sections.flatMap(section => section.articles)].find(article => article.title === 'News')!
+    expect(article).toBeTruthy()
+    const text = article.blocks.map(block => block.text).join(' ')
+    for (const word of body.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean)) expect(text).toContain(word)
+  })
+
+  it('preserves existing assets on same-identity import and restore conflicts', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-import-conflict-'))
+    temporaryPaths.push(root)
+    const dataRoot = path.join(root, 'data'), epubPath = path.join(root, 'book.epub')
+    const bytes = await syntheticEpub()
+    fs.writeFileSync(epubPath, bytes)
+    const db = await SqliteApplicationRepository.open(dataRoot, 'test')
+    try {
+      const library = new LibraryService(db, epubFormats(), dataRoot)
+      const original = await library.importFile(epubPath)
+      const assetsRoot = path.join(dataRoot, 'library', original.publication.id, 'assets')
+      const cover = path.join(assetsRoot, 'EPUB', 'images', 'cover.jpg')
+      const originalCover = fs.readFileSync(cover)
+      const zip = await JSZip.loadAsync(bytes)
+      zip.file('changed.txt', 'same identity, different bytes')
+      const changed = await zip.generateAsync({ type: 'nodebuffer' })
+      fs.writeFileSync(epubPath, changed)
+      await expect(library.importFile(epubPath)).rejects.toThrow('已存在')
+      const { assets, ...plan } = await new EpubImporter().parse(changed)
+      await expect(library.restoreParsedPublication({ ...plan, assetPaths: [...assets.keys()] }, assetsRoot, 'epub')).rejects.toThrow('已存在')
+      expect(fs.readFileSync(cover)).toEqual(originalCover)
+      expect(db.getPublication(original.publication.id).articleCount).toBe(1)
+      fs.unlinkSync(cover)
+      fs.writeFileSync(epubPath, bytes)
+      await expect(library.importFile(epubPath)).resolves.toMatchObject({ duplicate: true })
+      expect(fs.readFileSync(cover)).toEqual(originalCover)
+    } finally { db.close() }
+  })
   it('matches the shared EPUB safety policy and rejects hostile metadata without allocating payloads', () => {
     const vector = JSON.parse(fs.readFileSync(
       path.join(process.cwd(), 'test-vectors', 'epub-safety-v1.json'),
@@ -168,6 +209,11 @@ describe('EpubImporter', () => {
     expect(second.duplicate).toBe(true)
     expect(db.listPublications()).toHaveLength(1)
     expect(first.publication.articleCount).toBe(1)
+    const articleId = first.publication.sections[0].articles[0].id
+    const block = db.getTranslatableBlocks(articleId)[0]
+    db.saveTranslation(block.id, block.sourceHash, '原模型的有效译文', 'previous-model', 'previous-prompt')
+    db.saveTranslation(block.id, 'obsolete-source-hash', '不应显示的旧正文译文', 'other-model', 'other-prompt')
+    expect(db.getArticle(articleId).blocks[0].translation).toBe('原模型的有效译文')
     expect(fs.readFileSync(epubPath)).toEqual(source)
     expect(fs.existsSync(path.join(root, 'data', 'library', first.publication.id, 'source.epub'))).toBe(false)
     let state = db.createLibraryCategory('每周刊物')

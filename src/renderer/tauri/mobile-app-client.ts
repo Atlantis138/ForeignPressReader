@@ -21,6 +21,7 @@ export interface TauriMobileSettingsClient {
 }
 
 export interface TauriMobilePlatformClient {
+  readonly startup: { getState(): Promise<{message:string;snapshots:string[]}|null>; restore(name:string): Promise<void> }
   readonly appInfo: TauriMobileAppInfoClient
   readonly data: Pick<TauriMobileDataClient, 'discardPortableImport'>
   readonly storage: Pick<TauriMobileStorageClient, 'openAppStorageSettings'>
@@ -91,6 +92,7 @@ export class TauriMobileAppClient implements MobileAppClient {
     this.sync = new TauriMobileSyncClient(invokeCommand)
     this.developer = new TauriMobileDeveloperClient(invokeCommand)
     this.platform = {
+      startup: { getState:()=>invokeCommand('get_startup_recovery'),restore:(name)=>invokeCommand('restore_startup_snapshot',{name}) },
       appInfo,
       data: {
         discardPortableImport: (token) => data.discardPortableImport(token),

@@ -130,3 +130,14 @@ fn require_sync_identifier(value: &str) -> Result<(), PlatformError> {
     }
     Ok(())
 }
+
+#[tauri::command]
+pub fn get_mobile_sync_incoming_changes(
+    state: tauri::State<'_, PlatformState>,
+    transfer_id: String,
+    offset: usize,
+    limit: usize,
+) -> Result<serde_json::Value, PlatformError> {
+    require_sync_identifier(&transfer_id)?;
+    mobile_sync_runtime::incoming_changes(&state, &transfer_id, offset, limit)
+}

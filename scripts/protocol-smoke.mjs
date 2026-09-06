@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 const { _electron: electron } = require('playwright')
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const { LATEST_SCHEMA_VERSION } = require(path.join(projectRoot, 'dist-electron/main/migrations.js'))
 const mode = process.argv[2]
 const packagedExecutable = path.join(projectRoot, 'release', 'win-unpacked', '外刊阅读器.exe')
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'foreign-reader-protocol-'))
@@ -51,7 +52,7 @@ try {
   })
   await page.waitForTimeout(300)
   if (page.url() !== entry) throw new Error(`非法导航未被阻止：${page.url()}`)
-  if (result.schemaVersion !== 2 || result.unknownStatus !== 404
+  if (result.schemaVersion !== LATEST_SCHEMA_VERSION || result.unknownStatus !== 404
     || !result.popupDenied || result.childHasApi) {
     throw new Error(`renderer 安全探针失败：${JSON.stringify(result)}`)
   }

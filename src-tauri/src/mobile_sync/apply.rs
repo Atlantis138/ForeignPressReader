@@ -43,9 +43,6 @@ pub fn apply_transfer(
     let mut imported_publications = Vec::new();
     let result = (|| {
         for blob in &batch.blobs {
-            if mobile_reading::find_publication_by_hash(database, &blob.content_sha256)?.is_some() {
-                continue;
-            }
             let source = blob_paths
                 .get(&blob.sha256)
                 .ok_or_else(|| sync_invalid("同步批次缺少刊物内容包。"))?;
@@ -88,6 +85,7 @@ pub fn apply_transfer(
             &batch.batch_id,
             payload_sha256,
             batch.sender_revision,
+            batch.model_version,
         )?;
         for record in &batch.records {
             if record.entity_type == "publication-lifecycle"

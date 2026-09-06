@@ -6,4 +6,9 @@
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <queries><intent><action android:name="android.intent.action.TTS_SERVICE" /></intent></queries>
+    <application><service android:name="com.local.foreignpressreader.foundation.FoundationPlaybackService" android:exported="false" android:foregroundServiceType="mediaPlayback" android:stopWithTask="true" /></application>
 </manifest>

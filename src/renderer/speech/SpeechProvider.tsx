@@ -27,6 +27,7 @@ interface SpeechContextValue {
   next(): void
   stop(): void
   savePreferences(value: SpeechPreferences): Promise<SpeechPreferences>
+  refreshPreferences(): Promise<SpeechPreferences>
   refreshVoices(): Promise<void>
 }
 
@@ -40,11 +41,17 @@ export function SpeechProvider({ children, onError }: { children: ReactNode; onE
   const supported = client.speech.isSupported()
   const systemSupported = client.speech.isSystemSupported()
 
+  const refreshPreferences = useCallback(async () => {
+    const saved = await client.speech.getPreferences()
+    setPreferences(saved)
+    return saved
+  }, [])
+
   useEffect(() => {
-    client.speech.getPreferences().then(setPreferences).catch((reason) => onError(messageOf(reason)))
+    void refreshPreferences().catch((reason) => onError(messageOf(reason)))
     client.speech.listVoices().then(setVoices).catch(() => setVoices([])).finally(() => setVoicesLoaded(true))
     return client.speech.subscribe(setState)
-  }, [onError])
+  }, [onError, refreshPreferences])
 
   useEffect(() => {
     if (state.status === 'error' && state.error) onError(state.error)
@@ -88,8 +95,9 @@ export function SpeechProvider({ children, onError }: { children: ReactNode; onE
     next: () => client.speech.next(),
     stop: () => client.speech.stop(),
     savePreferences,
+    refreshPreferences,
     refreshVoices,
-  }), [canPlay, play, preferences, preview, refreshVoices, savePreferences, speakWord, state, supported, systemSupported, voices, voicesLoaded])
+  }), [canPlay, play, preferences, preview, refreshPreferences, refreshVoices, savePreferences, speakWord, state, supported, systemSupported, voices, voicesLoaded])
 
   return <SpeechContext.Provider value={value}>{children}</SpeechContext.Provider>
 }

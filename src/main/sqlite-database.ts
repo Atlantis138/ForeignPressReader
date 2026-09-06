@@ -135,13 +135,18 @@ export class AppDatabase {
         if (Number(objects.count) > 0) throw new Error('pre-formal database')
         return
       }
+      const metadataExists = database.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='app_metadata'").get()
+      if (!metadataExists) throw new Error('pre-formal database')
       const generation = database.prepare(
         "SELECT value FROM app_metadata WHERE key = 'schema_generation'",
       ).get() as Row | undefined
       if (String(generation?.value ?? '') !== SCHEMA_GENERATION) throw new Error('pre-formal database')
     } catch (error) {
       if (error instanceof Error && error.message.includes('高于当前正式版')) throw error
-      throw new Error('检测到不兼容的 Demo 或旧版数据库；正式版不提供旧数据迁移，请使用新的数据目录')
+      if (error instanceof Error && error.message === 'pre-formal database') {
+        throw new Error('检测到不兼容的 Demo 或旧版数据库；正式版不提供旧数据迁移，请使用新的数据目录')
+      }
+      throw new Error('无法读取数据库，可能是文件损坏或无法访问。请保留数据目录，并从可用备份恢复。')
     } finally {
       database?.close()
     }

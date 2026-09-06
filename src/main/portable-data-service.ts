@@ -1,3 +1,4 @@
+import { validateReaderRecord, type ReaderRecord } from '../core/reader-records'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -17,16 +18,21 @@ import type {
   PortableUserData,
 } from '../core/portable-data'
 import { CONTENT_ID_VERSION } from './epub-importer'
+import { isSafePublicationId } from '../core/publication-package'
 import type { PortableDataRepository } from './database-ports'
 import type { LibraryService } from './library-service'
 import { PublicationPackageService } from './publication-package-service'
+import {
+  isLibraryEntitySettingKey,
+  isValidLibraryEntitySetting,
+} from './library-sync-settings'
 
 const FORMAT = 'foreign-press-reader-portable'
-const FORMAT_VERSION = 2
+const FORMAT_VERSION = 4
 const MAX_ARCHIVE_BYTES = 20 * 1024 * 1024 * 1024
 const MAX_ENTRIES = 10_000
 const MAX_MANIFEST_BYTES = 1024 * 1024
-const MAX_SETTINGS_BYTES = 1024 * 1024
+const MAX_SETTINGS_BYTES = 16 * 1024 * 1024
 const MAX_RECORD_BYTES = 1024 * 1024
 const MERGE_BATCH_SIZE = 500
 
@@ -34,7 +40,7 @@ interface ManifestFile {
   path: string
   size: number
   sha256: string
-  kind: 'publication-lifecycle' | 'settings' | 'reading-positions' | 'user-lexemes' | 'lexeme-examples' | 'vocabulary-sources' | 'saved-contexts' | 'study-plans' | 'study-plan-sources' | 'study-plan-origins' | 'study-plan-exclusions' | 'scheduler-profiles' | 'review-cards' | 'review-events' | 'reinforcement-events' | 'review-suspensions' | 'study-progress-state' | 'study-lexeme-resets' | 'publication-package'
+  kind: 'reader-records' | 'publication-lifecycle' | 'settings' | 'reading-positions' | 'user-lexemes' | 'lexeme-examples' | 'vocabulary-sources' | 'saved-contexts' | 'study-plans' | 'study-plan-sources' | 'study-plan-origins' | 'study-plan-exclusions' | 'scheduler-profiles' | 'review-cards' | 'review-events' | 'reinforcement-events' | 'review-suspensions' | 'study-progress-state' | 'study-lexeme-resets' | 'publication-package'
 }
 
 interface PortableManifest {
@@ -47,6 +53,7 @@ interface PortableManifest {
   policy: 'essential-user-data'
   files: ManifestFile[]
   counts: {
+    readerRecords?: number
     publications: number
     settings: number
     readingPositions: number
@@ -69,6 +76,7 @@ interface PortableDatasetDescriptor {
 }
 
 const PORTABLE_DATASETS: readonly PortableDatasetDescriptor[] = [
+  { key: 'readerRecords', path: 'data/reader-records.ndjson', kind: 'reader-records' },
   { key: 'publicationLifecycle', path: 'data/publication-lifecycle.ndjson', kind: 'publication-lifecycle' },
   { key: 'settings', path: 'data/settings.json', kind: 'settings', settingsJson: true },
   { key: 'readingPositions', path: 'data/reading-positions.ndjson', kind: 'reading-positions' },
@@ -213,6 +221,7 @@ export class PortableDataService {
         policy: 'essential-user-data',
         files: logicalFiles.map((file) => file.manifest),
         counts: {
+          readerRecords: datasetCounts.get('readerRecords') ?? 0,
           publications: books.length,
           settings: datasetCounts.get('settings') ?? 0,
           readingPositions: datasetCounts.get('readingPositions') ?? 0,
@@ -260,7 +269,11 @@ export class PortableDataService {
       const manifestPath = path.join(root, 'manifest.json')
       if ((await fs.promises.stat(manifestPath)).size > MAX_MANIFEST_BYTES) throw new Error('备份清单超过 1 MiB 限制')
       const manifest = parseManifest(JSON.parse(await fs.promises.readFile(manifestPath, 'utf8')))
-      if (manifest.databaseSchemaVersion !== this.database.getSchemaStatus().schemaVersion) {
+      const currentSchemaVersion = this.database.getSchemaStatus().schemaVersion
+      const compatibleSchema = manifest.databaseSchemaVersion === currentSchemaVersion
+        || (manifest.formatVersion === 2 && manifest.databaseSchemaVersion === 2 && currentSchemaVersion >= 3)
+        || (manifest.formatVersion === 3 && manifest.databaseSchemaVersion === 3 && currentSchemaVersion >= 4)
+      if (!compatibleSchema) {
         throw new Error('备份数据库结构版本与当前应用不兼容')
       }
       await validateExtractedFiles(root, extracted, manifest)
@@ -316,6 +329,7 @@ export class PortableDataService {
         newPublicationCount: newCount,
         duplicatePublicationCount: books.length - newCount,
         settingCount: summary.counts.settings,
+        readerRecordCount: summary.counts.readerRecords ?? 0,
         readingPositionCount: summary.counts.readingPositions,
         vocabularyCount: summary.activeVocabularyCount,
         vocabularySourceCount: summary.activeVocabularySourceCount,
@@ -343,6 +357,7 @@ export class PortableDataService {
     let duplicate = 0
     const createdPublicationIds: string[] = []
     let mergeStarted = false
+    let mergeCommitted = false
     try {
       await this.database.createSafetyBackup('before-portable-import')
       for (let index = 0; index < staged.books.length; index++) {
@@ -366,12 +381,17 @@ export class PortableDataService {
       this.emit('import', 'merging-data', staged.books.length, staged.books.length, '正在合并用户数据')
       this.database.beginPortableMerge()
       mergeStarted = true
-      const { merged, deletedPublicationIds } = await this.mergePortableFiles(staged.root)
+      const { merged, deletedPublicationIds } = await this.mergePortableFiles(
+        staged.root,
+        staged.manifest.formatVersion >= 3 ? 'fine-grained' : 'legacy',
+      )
       this.database.commitPortableMerge()
       mergeStarted = false
+      mergeCommitted = true
       for (const publicationId of deletedPublicationIds) {
         if (this.database.getPublicationLifecycle(publicationId)?.state === 'deleted') {
-          await fs.promises.rm(path.join(this.userDataPath, 'library', publicationId), { recursive: true, force: true })
+          // Once committed, leftover files are cleanup work, not a failed import.
+          await fs.promises.rm(path.join(this.userDataPath, 'library', publicationId), { recursive: true, force: true }).catch(() => undefined)
         }
       }
       this.emit('import', 'completed', staged.totalBytes, staged.totalBytes, '导入完成')
@@ -395,7 +415,7 @@ export class PortableDataService {
       if (mergeStarted) {
         try { this.database.rollbackPortableMerge() } catch { /* preserve the original failure */ }
       }
-      for (const publicationId of createdPublicationIds.reverse()) {
+      for (const publicationId of mergeCommitted ? [] : createdPublicationIds.reverse()) {
         await this.library.purgeImportedPublication(publicationId).catch(() => undefined)
       }
       this.emit('import', isAbort(error) ? 'cancelled' : 'error', 0, staged.totalBytes, messageOf(error))
@@ -403,7 +423,7 @@ export class PortableDataService {
     } finally {
       this.controller = null
       this.staged.delete(token)
-      fs.rmSync(staged.root, { recursive: true, force: true })
+      try { fs.rmSync(staged.root, { recursive: true, force: true }) } catch { /* A stale staging directory must not undo a committed import. */ }
     }
   }
 
@@ -436,7 +456,7 @@ export class PortableDataService {
     this.emitProgress({ operation, stage, completedBytes, totalBytes, message })
   }
 
-  private async mergePortableFiles(root: string): Promise<{
+  private async mergePortableFiles(root: string, librarySyncMode: 'legacy' | 'fine-grained'): Promise<{
     merged: PortableMergeResult
     deletedPublicationIds: Set<string>
   }> {
@@ -451,6 +471,7 @@ export class PortableDataService {
           'newer-wins',
           false,
           false,
+          librarySyncMode,
         ))
         batch = []
       }
@@ -470,6 +491,7 @@ export class PortableDataService {
       'newer-wins',
       false,
       true,
+      librarySyncMode,
     ))
     return { merged, deletedPublicationIds }
   }
@@ -546,7 +568,7 @@ async function writePortableDataset(
       onRecord?.(record)
     }
     if (settingsJson) await write(']')
-    if (settingsJson && size > MAX_SETTINGS_BYTES) throw new Error('便携备份设置文件超过 1 MiB 限制')
+    if (settingsJson && size > MAX_SETTINGS_BYTES) throw new Error('便携备份设置文件超过 16 MiB 限制')
     await output.sync()
     return { count, size, sha256: digest.digest('hex') }
   } catch (error) {
@@ -567,6 +589,7 @@ export async function replacePortableBackup(
 }
 
 const PORTABLE_RECORD_FIELDS = {
+  readerRecords: ['recordId','publicationId','articleId','kind','payload','updatedAt','deviceId'],
   publicationLifecycle: ['publicationId', 'contentHash', 'formatId', 'titleSnapshot', 'state', 'changedAt', 'deviceId'],
   settings: ['key', 'value', 'updatedAt', 'deviceId'],
   readingPositions: ['publicationId', 'articleId', 'scrollTop', 'anchorBlockId', 'anchorTokenIndex', 'anchorFraction', 'updatedAt', 'deviceId'],
@@ -669,9 +692,10 @@ async function* iteratePortableDatasetFile(
   dataset: PortableDatasetDescriptor,
 ): AsyncGenerator<PortableDatasetRecord> {
   const filePath = path.join(root, ...dataset.path.split('/'))
+  if (dataset.key === 'readerRecords' && !fs.existsSync(filePath)) return
   if (dataset.settingsJson) {
     const stat = await fs.promises.stat(filePath)
-    if (stat.size > MAX_SETTINGS_BYTES) throw new Error('备份设置文件超过 1 MiB 限制')
+    if (stat.size > MAX_SETTINGS_BYTES) throw new Error('备份设置文件超过 16 MiB 限制')
     const values = JSON.parse(await fs.promises.readFile(filePath, 'utf8')) as unknown
     if (!Array.isArray(values)) throw new Error('备份设置文件结构无效')
     for (const value of values) {
@@ -739,12 +763,20 @@ function validatePortableRecord(dataset: PortableDatasetKey, value: unknown): Po
       throw new Error(`便携备份时间字段无效：${field}`)
     }
   }
+  if (dataset === 'readerRecords') validateReaderRecord(record as unknown as ReaderRecord)
   if (dataset === 'settings') {
-    if (!ALLOWED_SETTINGS.has(String(record.key))) throw new Error('便携备份包含不允许的设置')
-    try { JSON.parse(String(record.value)) } catch { throw new Error('便携备份设置值不是有效 JSON') }
+    const key = String(record.key)
+    if (!ALLOWED_SETTINGS.has(key) && !isLibraryEntitySettingKey(key)) throw new Error('便携备份包含不允许的设置')
+    let settingValue: unknown
+    try { settingValue = JSON.parse(String(record.value)) } catch { throw new Error('便携备份设置值不是有效 JSON') }
+    if (isLibraryEntitySettingKey(key) && !isValidLibraryEntitySetting(key, settingValue)) {
+      throw new Error('便携备份书库同步记录无效')
+    }
   }
   if (dataset === 'publicationLifecycle') {
-    if (!/^[a-f0-9]{64}$/.test(String(record.contentHash)) || !['present', 'deleted'].includes(String(record.state))) {
+    if (!isSafePublicationId(record.publicationId)
+      || !/^[a-f0-9]{64}$/.test(String(record.contentHash))
+      || !['present', 'deleted'].includes(String(record.state))) {
       throw new Error('刊物生命周期记录无效')
     }
   }
@@ -758,6 +790,7 @@ function validateManifestCounts(manifest: PortableManifest, summary: PortableSca
     ['reviewCards', 'reviewCards'], ['reviewEvents', 'reviewEvents'],
     ['reinforcementEvents', 'reinforcementEvents'], ['reviewSuspensions', 'reviewSuspensions'],
   ]
+  if (manifest.formatVersion >= 4) expected.push(['readerRecords', 'readerRecords'])
   for (const [manifestKey, datasetKey] of expected) {
     if (manifest.counts[manifestKey] !== summary.counts[datasetKey]) throw new Error(`备份记录数与清单不一致：${datasetKey}`)
   }
@@ -765,7 +798,7 @@ function validateManifestCounts(manifest: PortableManifest, summary: PortableSca
 
 function emptyPortableData(): PortableUserData {
   return {
-    publicationLifecycle: [], settings: [], readingPositions: [], userLexemes: [], lexemeExamples: [],
+    readerRecords: [], publicationLifecycle: [], settings: [], readingPositions: [], userLexemes: [], lexemeExamples: [],
     vocabularySources: [], savedContexts: [], studyPlans: [], studyPlanSources: [], studyPlanOrigins: [],
     studyPlanExclusions: [], schedulerProfiles: [], studyProgressState: [], studyLexemeResets: [],
     reviewCards: [], reviewEvents: [], reinforcementEvents: [], reviewSuspensions: [],
@@ -836,7 +869,7 @@ async function extractZip(sourcePath: string, root: string, checkCancelled: () =
         throw new Error('备份包压缩比例异常')
       }
       if (entryPath === 'manifest.json' && entry.uncompressedSize > MAX_MANIFEST_BYTES) throw new Error('备份清单超过 1 MiB 限制')
-      if (entryPath === 'data/settings.json' && entry.uncompressedSize > MAX_SETTINGS_BYTES) throw new Error('备份设置文件超过 1 MiB 限制')
+      if (entryPath === 'data/settings.json' && entry.uncompressedSize > MAX_SETTINGS_BYTES) throw new Error('备份设置文件超过 16 MiB 限制')
       if (!isAllowedEntry(entryPath)) throw new Error(`备份包包含未知文件：${entryPath}`)
       const destination = path.join(root, ...entryPath.split('/'))
       fs.mkdirSync(path.dirname(destination), { recursive: true })
@@ -904,7 +937,9 @@ function parseManifest(value: unknown): PortableManifest {
   const manifest = value as PortableManifest
   if (manifest.format !== FORMAT || manifest.policy !== 'essential-user-data') throw new Error('不是外刊阅读器便携备份')
   if (manifest.formatVersion > FORMAT_VERSION) throw new Error('备份格式来自更高版本，请先升级应用')
-  if (manifest.formatVersion !== FORMAT_VERSION || manifest.contentIdVersion !== CONTENT_ID_VERSION) {
+  const supportedFormat = [2, 3, FORMAT_VERSION].includes(manifest.formatVersion)
+  const supportedSchema = manifest.databaseSchemaVersion === manifest.formatVersion
+  if (!supportedFormat || !supportedSchema || manifest.contentIdVersion !== CONTENT_ID_VERSION) {
     throw new Error('备份格式或内容ID版本不受支持')
   }
   if (!Number.isSafeInteger(manifest.databaseSchemaVersion) || manifest.databaseSchemaVersion < 1
@@ -912,7 +947,7 @@ function parseManifest(value: unknown): PortableManifest {
     || typeof manifest.createdAt !== 'string' || !RFC3339.test(manifest.createdAt) || !Number.isFinite(Date.parse(manifest.createdAt))) {
     throw new Error('备份清单版本或时间字段无效')
   }
-  if (!Array.isArray(manifest.files) || manifest.files.length < PORTABLE_DATASETS.length
+  if (!Array.isArray(manifest.files) || manifest.files.length < PORTABLE_DATASETS.length - (manifest.formatVersion < 4 ? 1 : 0)
     || manifest.files.length > MAX_ENTRIES - 1 || !manifest.counts || typeof manifest.counts !== 'object') {
     throw new Error('备份清单缺少文件列表或记录数')
   }
@@ -920,8 +955,9 @@ function parseManifest(value: unknown): PortableManifest {
     'publications', 'settings', 'readingPositions', 'vocabulary', 'vocabularySources', 'savedContexts',
     'studyPlans', 'reviewCards', 'reviewEvents', 'reinforcementEvents', 'reviewSuspensions',
   ]
+  if (manifest.formatVersion >= 4) countKeys.push('readerRecords')
   if (Object.keys(manifest.counts).length !== countKeys.length
-    || countKeys.some((key) => !Number.isSafeInteger(manifest.counts[key]) || manifest.counts[key] < 0)) {
+    || countKeys.some((key) => !Number.isSafeInteger(manifest.counts[key]) || (manifest.counts[key] ?? -1) < 0)) {
     throw new Error('备份清单记录数无效')
   }
   return manifest
@@ -954,6 +990,7 @@ async function validateExtractedFiles(root: string, extracted: string[], manifes
     if (!Number.isSafeInteger(total) || total > MAX_ARCHIVE_BYTES) throw new Error('备份清单数据总量超过 20 GB 限制')
   }
   for (const dataset of PORTABLE_DATASETS) {
+    if (dataset.key === 'readerRecords' && manifest.formatVersion < 4) continue
     if (!manifest.files.some((file) => file.path === dataset.path && file.kind === dataset.kind)) {
       throw new Error(`备份缺少必要数据文件：${dataset.path}`)
     }

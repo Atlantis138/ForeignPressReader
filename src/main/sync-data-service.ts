@@ -1,3 +1,6 @@
+import type { SyncChangePage } from '../shared/types'
+import { canonicalJson as stableJson } from '../core/canonical-json'
+import { validateReaderRecord, type ReaderRecord } from '../core/reader-records'
 import crypto from 'node:crypto'
 import { once } from 'node:events'
 import fs from 'node:fs'
@@ -15,6 +18,7 @@ import {
   type LanSyncBatchHeaderLineV2,
 } from '../core/sync-wire'
 import {
+  PREVIOUS_SYNC_MODEL_VERSION,
   SYNC_MODEL_VERSION,
   type JsonObject,
   type JsonValue,
@@ -22,10 +26,10 @@ import {
   type PublicationPackageBlobRefV2,
   type SyncApplyResult,
   type SyncBatch,
-  type SyncBatchV2,
+  type SyncBatchV4,
   type SyncEntityRef,
   type SyncEntityType,
-  type SyncPeerSummaryV2,
+  type SyncPeerSummaryV4,
 } from '../core/sync-model'
 import type {
   PortableSettingRecord,
@@ -44,9 +48,12 @@ import type {
 } from '../core/portable-data'
 import type { SyncDataRepository } from './database-ports'
 import type { LibraryService } from './library-service'
+import { isLibraryEntitySettingKey, isValidLibraryEntitySetting } from './library-sync-settings'
 import { PublicationPackageService, publicationPackageExpandedBytes } from './publication-package-service'
+import { isSafePublicationId } from '../core/publication-package'
 
 const ENTITY_TYPE_BY_TABLE = {
+  reader_records: 'reader-record',
   publication_lifecycle: 'publication-lifecycle',
   settings: 'setting',
   reading_positions: 'reading-position',
@@ -68,6 +75,10 @@ const ENTITY_TYPE_BY_TABLE = {
 } as const satisfies Record<string, SyncEntityType>
 
 type DatabaseEntityType = keyof typeof ENTITY_TYPE_BY_TABLE
+const SYNC_RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+const PUBLICATION_FORMAT_ID = /^[a-z0-9][a-z0-9-]{0,63}$/i
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i
+const LEGACY_SYNC_IDENTIFIER = /^[a-z0-9._-]{1,100}$/i
 
 export interface PreparedSyncTransfer<TBatch extends SyncBatch = SyncBatch> {
   batch: TBatch
@@ -93,7 +104,7 @@ interface PersistedOutgoingTransfer {
 }
 
 export interface SyncToResult {
-  batch: SyncBatchV2
+  batch: SyncBatchV4
   result: SyncApplyResult
 }
 
@@ -175,7 +186,7 @@ export class SyncDataService {
   }
 
   /** Build a deterministic logical payload plus local paths for required blobs. */
-  async prepareSyncTo(target: SyncDataService): Promise<PreparedSyncTransfer<SyncBatchV2>> {
+  async prepareSyncTo(target: SyncDataService): Promise<PreparedSyncTransfer<SyncBatchV4>> {
     if (target.deviceId === this.deviceId) throw new Error('不能向当前设备自身同步')
 
     const peerState = this.database.getSyncPeerState(target.deviceId)
@@ -189,8 +200,8 @@ export class SyncDataService {
   /** Build a transfer from a summary obtained through any transport. */
   async prepareSyncForPeer(
     peerDeviceId: string,
-    summary: SyncPeerSummaryV2,
-  ): Promise<PreparedSyncTransfer<SyncBatchV2>> {
+    summary: SyncPeerSummaryV4,
+  ): Promise<PreparedSyncTransfer<SyncBatchV4>> {
     if (peerDeviceId === this.deviceId || summary.deviceId !== peerDeviceId) {
       throw new Error('同步目标设备身份不匹配')
     }
@@ -200,25 +211,29 @@ export class SyncDataService {
     if (resumable) return resumable
 
     const peerState = this.database.getSyncPeerState(peerDeviceId)
-    const revisionByIdentity = this.currentRevisionByIdentity()
-    const records = portableDataToLogicalRecords(
-      this.database.exportPortableUserData(),
-      (type, key) => revisionByIdentity.get(entityIdentity(type, key)) ?? 0,
-    )
-    const currentEntities = records.map(recordRef)
     const localChanges = this.database.listSyncEntityRevisions(0).map(databaseEntityRef)
+    const revisionByIdentity = new Map(localChanges.map(ref=>[entityIdentity(ref.type,ref.key),ref.revision]))
     const selection = planSyncSelection({
-      localRevision: this.database.getSyncRevision(),
-      currentEntities,
-      localChanges,
-      peer: peerState ? summary : null,
+      localRevision: this.database.getSyncRevision(), currentEntities: localChanges, localChanges, peer: peerState ? summary : null,
     })
-    const recordByIdentity = new Map(records.map((record) => [entityIdentity(record.type, record.key), record]))
-    const selectedRecords = selection.entities.map((ref) => {
+    const requested = [...selection.entities, ...selection.entities.filter(ref=>ref.type==='publication-lifecycle').map(ref=>({...ref,type:'reading-position' as const}))]
+    const records = portableDataToLogicalRecords(this.database.exportPortableUserData(requested), (type,key)=>revisionByIdentity.get(entityIdentity(type,key)) ?? 0)
+    const recordByIdentity = new Map(records.map(record=>[entityIdentity(record.type,record.key),record]))
+    const selectedRefs = new Map(selection.entities.map((ref) => [entityIdentity(ref.type, ref.key), ref]))
+    // Deleting a publication physically cascades its device-local reading
+    // position. If this sender later wins with `present`, resend that dependent
+    // state even though the receiver has no position tombstone to report.
+    for (const ref of selection.entities) {
       const record = recordByIdentity.get(entityIdentity(ref.type, ref.key))
-      if (!record) throw new Error(`同步实体缺少当前逻辑状态：${ref.type}/${ref.key}`)
+      if (record?.type !== 'publication-lifecycle' || record.value.state !== 'present') continue
+      const positionIdentity = entityIdentity('reading-position', record.value.publicationId)
+      const position = recordByIdentity.get(positionIdentity)
+      if (position) selectedRefs.set(positionIdentity, recordRef(position))
+    }
+    const selectedRecords = [...selectedRefs.values()].map((ref) => {
+      const record = recordByIdentity.get(entityIdentity(ref.type, ref.key))
       return record
-    })
+    }).filter((record): record is LogicalRecordV1 => record !== undefined)
 
     const availableHashes = new Set(summary.availableBlobHashes)
     const booksByHash = new Map(this.database.listPortableBooks().map((book) => [book.hash, book]))
@@ -230,7 +245,7 @@ export class SyncDataService {
     try {
       for (const record of selectedRecords) {
         if (record.type !== 'publication-lifecycle' || record.value.state !== 'present') continue
-        if (availableHashes.has(record.value.contentHash)) continue
+        if (availableHashes.has(this.database.getPublicationContentHash(record.value.publicationId))) continue
         const book = booksByHash.get(record.value.contentHash)
         if (!book || book.publicationId !== record.value.publicationId) {
           throw new Error(`活动刊物缺少解析内容：${record.value.title}`)
@@ -264,7 +279,7 @@ export class SyncDataService {
       const updatedAt = new Date().toISOString()
       const expiresAt = new Date(Date.now() + LAN_SYNC_LIMITS.transferLifetimeMs).toISOString()
       const totalByteLength = payload.byteLength + blobs.reduce((sum, blob) => sum + blob.byteLength, 0)
-      const transfer: PreparedSyncTransfer<SyncBatchV2> = {
+      const transfer: PreparedSyncTransfer<SyncBatchV4> = {
         batch,
         payloadSha256: payload.sha256,
         payloadPath,
@@ -317,7 +332,7 @@ export class SyncDataService {
     let mergeCommitted = false
     try {
       const importedBlobs = await this.importMissingBlobs(transfer, importedPublicationIds)
-      const currentData = this.database.exportPortableUserData()
+      const currentData = this.database.exportPortableUserData(batch.records)
       const before = logicalValuesByIdentity(portableDataToLogicalRecords(currentData, () => 0))
       const portable = logicalRecordsToPortableData(batch.records, currentData.settings)
       this.database.applyIncomingSyncData(portable, {
@@ -325,11 +340,11 @@ export class SyncDataService {
         batchId: batch.batchId,
         payloadSha256: actualPayloadHash,
         senderThroughRevision: batch.senderRevision,
-      })
+      }, batch.modelVersion >= 3 ? 'fine-grained' : 'legacy')
       mergeCommitted = true
 
       const after = logicalValuesByIdentity(portableDataToLogicalRecords(
-        this.database.exportPortableUserData(),
+        this.database.exportPortableUserData(batch.records),
         () => 0,
       ))
       let appliedRecords = 0
@@ -366,7 +381,7 @@ export class SyncDataService {
     }
   }
 
-  createPeerSummary(senderDeviceId: string, changedSinceRevision: number): SyncPeerSummaryV2 {
+  createPeerSummary(senderDeviceId: string, changedSinceRevision: number): SyncPeerSummaryV4 {
     if (!senderDeviceId || senderDeviceId === this.deviceId) throw new Error('同步发送设备无效')
     if (!Number.isSafeInteger(changedSinceRevision) || changedSinceRevision < 0) {
       throw new Error('同步 revision 无效')
@@ -379,14 +394,27 @@ export class SyncDataService {
       lastAppliedSenderRevision: peer?.inboundAppliedRevision ?? 0,
       changedEntitiesSinceRevision: changedSinceRevision,
       changedEntities: this.database.listSyncEntityRevisions(changedSinceRevision).map(databaseEntityRef),
-      availableBlobHashes: [...new Set(this.database.listPortableBooks().map((book) => book.hash))].sort(),
+      availableBlobHashes: [...new Set(this.database.listPortableBooks().map((book) => this.database.getPublicationContentHash(book.publicationId)))].sort(),
     }
   }
 
-  previewIncomingBatch(batch: SyncBatchV2): IncomingSyncPreviewPlan {
+  previewRecordPage(batch: SyncBatchV4, offset: number, limit: number): SyncChangePage {
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error('同步预览分页无效')
+    const records = batch.records.slice(offset, offset + limit)
+    const current = new Map(portableDataToLogicalRecords(this.database.exportPortableUserData(records), () => 0).map(r => [entityIdentity(r.type, r.key), r]))
+    return { total: batch.records.length, offset, limit, items: records.map(record => {
+      const existing = current.get(entityIdentity(record.type, record.key))
+      const unchanged = existing && stableJson(existing.value) === stableJson(record.value)
+      const articleId = (record.value as unknown as JsonObject).articleId
+      const label = typeof articleId === 'string' ? (this.database.getArticleTitle(articleId) ?? '待恢复的文章').slice(0,160) : undefined
+      return { type: record.type, key: record.key, label, action: unchanged ? 'unchanged' : record.type === 'publication-lifecycle' && record.value.state === 'deleted' ? 'delete' : existing ? 'update' : 'new', before: existing ? describeSyncValue(existing) : null, after: describeSyncValue(record) }
+    }) }
+  }
+
+  previewIncomingBatch(batch: SyncBatchV4): IncomingSyncPreviewPlan {
     validateBatchEnvelope(batch, this.deviceId)
     const current = new Map(portableDataToLogicalRecords(
-      this.database.exportPortableUserData(),
+      this.database.exportPortableUserData(batch.records),
       () => 0,
     ).map((record) => [entityIdentity(record.type, record.key), record]))
     let newPublications = 0
@@ -414,9 +442,7 @@ export class SyncDataService {
       updatedRecords++
     }
 
-    const missingBlobs = batch.blobs.filter((blob) =>
-      !this.database.findPublicationIdByHash(blob.contentSha256),
-    )
+    const missingBlobs = batch.blobs
     const totalBytes = missingBlobs.reduce((sum, blob) => sum + blob.byteLength, 0)
     if (!Number.isSafeInteger(totalBytes)) throw new Error('同步刊物包总大小无效')
     return {
@@ -429,12 +455,6 @@ export class SyncDataService {
     }
   }
 
-  private currentRevisionByIdentity(): Map<string, number> {
-    return new Map(this.database.listSyncEntityRevisions(0).map((row) => {
-      const ref = databaseEntityRef(row)
-      return [entityIdentity(ref.type, ref.key), ref.revision]
-    }))
-  }
 
   acknowledgeTransfer(peerDeviceId: string, senderRevision: number, peerRevision: number): void {
     const current = this.database.getSyncPeerState(peerDeviceId)
@@ -454,7 +474,7 @@ export class SyncDataService {
     let importedBlobs = 0
     for (const blob of transfer.batch.blobs) {
       const contentHash = blob.kind === 'publication-package' ? blob.contentSha256 : blob.sha256
-      if (this.database.findPublicationIdByHash(contentHash)) continue
+      if (blob.kind !== 'publication-package' && this.database.findPublicationIdByHash(contentHash)) continue
       const sourcePath = transfer.blobSourcePaths[blob.sha256]
       if (!sourcePath) throw new Error(`同步批次缺少刊物文件：${blob.sha256}`)
       const stat = await fs.promises.stat(sourcePath)
@@ -508,7 +528,7 @@ export class SyncDataService {
     return result.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   }
 
-  private async loadResumableTransfer(peerDeviceId: string): Promise<PreparedSyncTransfer<SyncBatchV2> | null> {
+  private async loadResumableTransfer(peerDeviceId: string): Promise<PreparedSyncTransfer<SyncBatchV4> | null> {
     const candidates = await this.listResumableTransfers()
     for (const candidate of candidates) {
       if (candidate.peerDeviceId !== peerDeviceId) continue
@@ -596,6 +616,7 @@ export function portableDataToLogicalRecords(
     records.push({ ...record, revision: revisionFor(record.type, record.key) } as T)
   }
 
+  for (const row of data.readerRecords ?? []) add({type: 'reader-record', key: row.recordId, value: {...row}})
   for (const row of data.publicationLifecycle) add({
     type: 'publication-lifecycle', key: row.publicationId,
     value: {
@@ -608,15 +629,21 @@ export function portableDataToLogicalRecords(
       deviceId: row.deviceId,
     },
   })
-  for (const row of data.settings) add({
-    type: 'setting', key: row.key,
-    value: {
-      key: row.key,
-      value: projectSettingValue(row.key, parseJsonValue(row.value)),
-      updatedAt: row.updatedAt,
-      deviceId: row.deviceId,
-    },
-  })
+  for (const row of data.settings) {
+    // Model v3 uses the independent library.category/item records. The large
+    // management object remains a local UI/portable compatibility mirror and
+    // must not reintroduce a single-record wire size or conflict boundary.
+    if (row.key === 'library.management') continue
+    add({
+      type: 'setting', key: row.key,
+      value: {
+        key: row.key,
+        value: projectSettingValue(row.key, parseJsonValue(row.value)),
+        updatedAt: row.updatedAt,
+        deviceId: row.deviceId,
+      },
+    })
+  }
   for (const row of data.readingPositions) add({
     type: 'reading-position', key: row.publicationId,
     value: {
@@ -792,6 +819,7 @@ export function logicalRecordsToPortableData(
   ]))
   for (const record of records) {
     switch (record.type) {
+      case 'reader-record': { const row = record.value as unknown as ReaderRecord; validateReaderRecord(row); data.readerRecords!.push({...row}); break }
       case 'publication-lifecycle': data.publicationLifecycle.push({
         publicationId: record.value.publicationId,
         contentHash: record.value.contentHash,
@@ -889,7 +917,7 @@ export function stablePayloadSha256(batch: SyncBatch): string {
 
 function emptyPortableUserData(): PortableUserData {
   return {
-    publicationLifecycle: [], settings: [], readingPositions: [], userLexemes: [], lexemeExamples: [],
+    readerRecords: [], publicationLifecycle: [], settings: [], readingPositions: [], userLexemes: [], lexemeExamples: [],
     vocabularySources: [], savedContexts: [], studyPlans: [], studyPlanSources: [],
     studyPlanOrigins: [], studyPlanExclusions: [], schedulerProfiles: [], reviewCards: [],
     reviewEvents: [], reinforcementEvents: [], reviewSuspensions: [],
@@ -898,32 +926,70 @@ function emptyPortableUserData(): PortableUserData {
 }
 
 export function validateBatchEnvelope(batch: SyncBatch, recipientDeviceId: string): void {
-  if (batch.modelVersion !== 1 && batch.modelVersion !== SYNC_MODEL_VERSION) throw new Error('同步模型版本不兼容')
+  if (batch.modelVersion !== 1 && batch.modelVersion !== PREVIOUS_SYNC_MODEL_VERSION
+    && batch.modelVersion !== 3 && batch.modelVersion !== SYNC_MODEL_VERSION) throw new Error('同步模型版本不兼容')
   if (batch.recipientDeviceId !== recipientDeviceId) throw new Error('同步批次接收设备不匹配')
-  if (!batch.senderDeviceId || batch.senderDeviceId === recipientDeviceId) throw new Error('同步批次发送设备无效')
-  if (!batch.batchId) throw new Error('同步批次缺少标识')
+  const validSender = batch.modelVersion >= 3
+    ? UUID.test(batch.senderDeviceId)
+    : LEGACY_SYNC_IDENTIFIER.test(batch.senderDeviceId)
+  const validBatchId = batch.modelVersion >= 3
+    ? UUID.test(batch.batchId)
+    : LEGACY_SYNC_IDENTIFIER.test(batch.batchId)
+  if (!validSender || batch.senderDeviceId === recipientDeviceId) throw new Error('同步批次发送设备无效')
+  if (!validBatchId) throw new Error('同步批次标识无效')
+  if (batch.mode !== 'snapshot' && batch.mode !== 'incremental') throw new Error('同步批次模式无效')
   if (!Number.isSafeInteger(batch.senderRevision) || batch.senderRevision < 0) throw new Error('同步批次 revision 无效')
-  if (!Number.isFinite(Date.parse(batch.createdAt))) throw new Error('同步批次时间无效')
+  if (!validNullableRevision(batch.fromSenderRevisionExclusive)
+    || !validNullableRevision(batch.inspectedPeerRevision)
+    || (batch.mode === 'snapshot' && (batch.fromSenderRevisionExclusive !== null || batch.inspectedPeerRevision !== null))
+    || (batch.mode === 'incremental' && (batch.fromSenderRevisionExclusive === null || batch.inspectedPeerRevision === null))
+    || (batch.fromSenderRevisionExclusive !== null && batch.fromSenderRevisionExclusive > batch.senderRevision)) {
+    throw new Error('同步批次 revision 范围无效')
+  }
+  if (!SYNC_RFC3339.test(batch.createdAt) || !Number.isFinite(Date.parse(batch.createdAt))) {
+    throw new Error('同步批次时间无效')
+  }
+  if (!Array.isArray(batch.records) || batch.records.length > LAN_SYNC_LIMITS.records
+    || !Array.isArray(batch.blobs) || batch.blobs.length > LAN_SYNC_LIMITS.blobs) {
+    throw new Error('同步批次数量超出限制')
+  }
   const recordIdentities = new Set<string>()
   const presentPublications = new Map<string, Extract<LogicalRecordV1, {type:'publication-lifecycle'}>['value']>()
   for (const record of batch.records) {
-    if (!record.key || !Number.isSafeInteger(record.revision) || record.revision < 0) throw new Error('同步逻辑记录无效')
+    if (!record.key || record.key.length > 512 || !Number.isSafeInteger(record.revision) || record.revision < 0
+      || record.revision > batch.senderRevision) throw new Error('同步逻辑记录无效')
     const identity = entityIdentity(record.type, record.key)
     if (recordIdentities.has(identity)) throw new Error('同步批次包含重复逻辑记录')
     recordIdentities.add(identity)
     if (logicalRecordKey(record) !== record.key) throw new Error('同步逻辑记录标识不一致')
+    if (record.type === 'reader-record') { if (batch.modelVersion < 4) throw new Error('阅读数据需要同步模型 v4'); validateReaderRecord(record.value as unknown as ReaderRecord) }
+    if (record.type === 'setting' && isLibraryEntitySettingKey(record.value.key)) {
+      if (batch.modelVersion < 3
+        || !isValidLibraryEntitySetting(record.value.key, record.value.value)) {
+        throw new Error('同步书库细粒度记录无效')
+      }
+    }
     if (record.type === 'publication-lifecycle') {
-      if (!/^[a-f0-9]{64}$/.test(record.value.contentHash) || !['present','deleted'].includes(record.value.state)) throw new Error('同步刊物生命周期无效')
+      if (!isSafePublicationId(record.value.publicationId)
+        || !/^[a-f0-9]{64}$/.test(record.value.contentHash)
+        || !['present','deleted'].includes(record.value.state)) throw new Error('同步刊物生命周期无效')
       if (record.value.state === 'present') presentPublications.set(record.value.contentHash, record.value)
     }
   }
   const blobs = new Map(batch.blobs.map((blob) => [blob.sha256, blob]))
   if (blobs.size !== batch.blobs.length) throw new Error('同步批次包含重复大对象')
   for (const blob of batch.blobs) {
-    if (!/^[a-f0-9]{64}$/.test(blob.sha256) || !Number.isSafeInteger(blob.byteLength) || blob.byteLength < 0) throw new Error('同步大对象描述无效')
+    if (!isSafePublicationId(blob.publicationId) || !PUBLICATION_FORMAT_ID.test(blob.formatId)
+      || !/^[a-f0-9]{64}$/.test(blob.sha256)
+      || !Number.isSafeInteger(blob.byteLength) || blob.byteLength <= 0
+      || blob.byteLength > LAN_SYNC_LIMITS.publicationPackageBytes) throw new Error('同步大对象描述无效')
     if ((batch.modelVersion === 1 && blob.kind !== 'publication-source')
-      || (batch.modelVersion === SYNC_MODEL_VERSION && blob.kind !== 'publication-package')) {
+      || (batch.modelVersion !== 1 && blob.kind !== 'publication-package')) {
       throw new Error('同步模型与刊物对象类型不一致')
+    }
+    if (batch.modelVersion !== 1
+      && blob.mediaType !== 'application/vnd.foreign-press-reader.publication+zip') {
+      throw new Error('同步刊物包媒体类型无效')
     }
     const contentHash = blob.kind === 'publication-package' ? blob.contentSha256 : blob.sha256
     if (!/^[a-f0-9]{64}$/.test(contentHash)) throw new Error('同步刊物内容身份无效')
@@ -934,8 +1000,13 @@ export function validateBatchEnvelope(batch: SyncBatch, recipientDeviceId: strin
   }
 }
 
+function validNullableRevision(value: number | null): boolean {
+  return value === null || (Number.isSafeInteger(value) && value >= 0)
+}
+
 function logicalRecordKey(record: LogicalRecordV1): string {
   switch (record.type) {
+    case 'reader-record': return record.value.recordId
     case 'publication-lifecycle': return record.value.publicationId
     case 'setting': return record.value.key
     case 'reading-position': return record.value.publicationId
@@ -1158,19 +1229,7 @@ function portableStudyLexemeReset(value: JsonObject): PortableStudyLexemeResetRe
   }
 }
 
-function stableJson(value: unknown): string {
-  return JSON.stringify(sortJson(value))
-}
 
-function sortJson(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortJson)
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => [key, sortJson(child)]))
-  }
-  return value
-}
 
 async function sha256File(filePath: string): Promise<string> {
   const hash = crypto.createHash('sha256')
@@ -1181,7 +1240,7 @@ async function sha256File(filePath: string): Promise<string> {
 
 async function writeBatchPayload(
   destination: string,
-  batch: SyncBatchV2,
+  batch: SyncBatchV4,
 ): Promise<{ sha256: string; byteLength: number }> {
   const temporary = `${destination}.part`
   const output = fs.createWriteStream(temporary, { flags: 'wx', mode: 0o600 })
@@ -1206,7 +1265,7 @@ async function writeBatchPayload(
   }
 }
 
-export async function readBatchPayload(source: string): Promise<SyncBatchV2> {
+export async function readBatchPayload(source: string): Promise<SyncBatchV4> {
   const stat = await fs.promises.stat(source)
   if (!stat.isFile() || stat.size <= 0 || stat.size > LAN_SYNC_LIMITS.batchMetadataBytes) {
     throw new Error('同步批次文件大小无效')
@@ -1289,4 +1348,19 @@ function validOutgoingState(value: PersistedOutgoingTransfer): boolean {
     && Number.isSafeInteger(value.totalByteLength) && value.totalByteLength >= value.payloadByteLength
     && value.blobSourcePaths != null && typeof value.blobSourcePaths === 'object'
     && Number.isFinite(Date.parse(value.updatedAt)) && Number.isFinite(Date.parse(value.expiresAt))
+}
+
+function describeSyncValue(record: LogicalRecordV1): string {
+  const value = record.value as unknown as JsonObject
+  if (record.type === 'reader-record') {
+    const payload = JSON.parse(String(value.payload)) as JsonValue
+    const time = ' · 修改时间：' + String(value.updatedAt).slice(0,50)
+    if (value.kind === 'bookmark') return (payload ? '已加书签' : '未加书签') + time
+    if (value.kind === 'read') return (payload ? '已读' : '未读') + time
+    if (value.kind === 'translation-selection') return (payload ? '查看保留的译文版本' : '查看当前缓存译文') + time
+    if (value.kind === 'translation') { const segment=payload as JsonObject; return ('保留译文 · ' + segment.model + '：' + segment.text).slice(0,400) + time }
+    return '已保存文章阅读位置' + time
+  }
+  const names: Record<string, string> = { title: '标题', name: '名称', lemma: '单词', state: '状态', kind: '类型', payload: '内容', value: '设置值', sourceText: '原文', text: '内容', translation: '译文', due: '到期', updatedAt: '修改时间', changedAt: '修改时间', articleId: '文章', rating: '评分' }
+  return Object.entries(names).flatMap(([key, name]) => value[key] === undefined ? [] : [name + '：' + (typeof value[key] === 'string' ? value[key] : stableJson(value[key])).slice(0, 160)]).join(' · ').slice(0, 500) || '记录 ' + record.key.slice(0, 100)
 }

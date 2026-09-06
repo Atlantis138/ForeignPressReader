@@ -1,3 +1,5 @@
+import { ArticleSearch } from './reader/ReadingTools'
+import { usePreferenceWriter } from './use-preference-writer'
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -150,6 +152,27 @@ export function App() {
     setLibraryState(await appClient.library.getState())
   }, [])
 
+  const reloadExternallyChangedData = useCallback(async () => {
+    const [nextLibrary, nextPreferences] = await Promise.all([
+      appClient.library.getState(),
+      appClient.reader.getPreferences(),
+    ])
+    const publicationIds = new Set(nextLibrary.publications.map((publication) => publication.id))
+    setLibraryState(nextLibrary)
+    setPreferences(nextPreferences)
+    setLibraryRoute((current) => current.name === 'library' || publicationIds.has(
+      current.name === 'publication' ? current.id : current.publicationId,
+    ) ? current : { name: 'library' })
+    setDictionarySnapshot((current) => ({ ...current, selectedItem: null }))
+    setStudySnapshot(DEFAULT_STUDY_SNAPSHOT)
+    setSettingsSnapshot((current) => ({
+      ...current,
+      translationDraft: null,
+      speechDraft: null,
+      studyPreferences: null,
+    }))
+  }, [])
+
   const switchArea = useCallback((next: PrimaryArea) => {
     if (next === activeArea) return
     const container = document.querySelector<HTMLElement>('.main-content')
@@ -205,7 +228,7 @@ export function App() {
     try {
       const result = await appClient.library.importPublication()
       if (!result) return
-      setNotice(result.duplicate ? '这本刊物已经在书库中' : `已导入 ${result.publication.articleCount} 篇文章`)
+      setNotice(result.repaired ? '已重新解析并补全原刊物，阅读记录已保留' : result.duplicate ? '这本刊物已经在书库中' : `已导入 ${result.publication.articleCount} 篇文章`)
       setLibraryState(await appClient.library.getState())
       navigateLibrary({ name: 'publication', id: result.publication.id })
     } catch (reason) {
@@ -215,14 +238,8 @@ export function App() {
     }
   }
 
-  const savePreferences = async (next: ReaderPreferences) => {
-    setPreferences(next)
-    try {
-      setPreferences(await appClient.reader.savePreferences(next))
-    } catch (reason) {
-      setError(messageOf(reason))
-    }
-  }
+  const savePreferences = usePreferenceWriter(preferences, setPreferences,
+    next => appClient.reader.savePreferences(next), reason => setError(messageOf(reason)))
 
   return (
     <SpeechProvider onError={setError}>
@@ -264,6 +281,7 @@ export function App() {
         )}
 
         {activeArea === 'library' && <div className="primary-workspace" data-area="library">
+        {libraryRoute.name === 'library' && <ArticleSearch reader={appClient.reader} onOpen={(publicationId,id)=>navigateLibrary({name:'article',publicationId,id})} />}
         {libraryRoute.name === 'library' && (
           <LibraryView state={libraryState} snapshot={librarySnapshot} onSnapshot={setLibrarySnapshot} onState={setLibraryState} onImport={importEpub} onOpen={(id) => navigateLibrary({ name: 'publication', id })} onNotice={setNotice} onError={setError} />
         )}
@@ -299,7 +317,7 @@ export function App() {
         </div>}
         {activeArea === 'study' && <div className="primary-workspace" data-area="study"><StudyPage snapshot={studySnapshot} onSnapshot={setStudySnapshot} onError={setError} onNotice={setNotice} /></div>}
         {activeArea === 'settings' && <div className="primary-workspace" data-area="settings">
-          <SettingsView preferences={preferences} snapshot={settingsSnapshot} onSnapshot={setSettingsSnapshot} onPreferences={savePreferences} onNotice={setNotice} onError={setError} />
+          <SettingsView preferences={preferences} snapshot={settingsSnapshot} onSnapshot={setSettingsSnapshot} onPreferences={savePreferences} onDataChanged={reloadExternallyChangedData} onNotice={setNotice} onError={setError} />
         </div>}
       </main>
     </div>
@@ -588,6 +606,7 @@ function SettingsView({
   snapshot,
   onSnapshot,
   onPreferences,
+  onDataChanged,
   onNotice,
   onError,
 }: {
@@ -595,6 +614,7 @@ function SettingsView({
   snapshot: SettingsSnapshot
   onSnapshot(value: SettingsSnapshot): void
   onPreferences(value: ReaderPreferences): void
+  onDataChanged(): void | Promise<void>
   onNotice(message: string): void
   onError(message: string): void
 }) {
@@ -639,6 +659,22 @@ function SettingsView({
     setDictionaryPreferences(nextPreferences)
     setDictionaryCredentialStatus(nextCredentialStatus)
   }, [])
+  const refreshExternallyChangedData = useCallback(async () => {
+    await onDataChanged()
+    const [nextTranslation, nextSpeech, nextStudyPreferences] = await Promise.all([
+      appClient.settings.getTranslationSettings(),
+      appClient.speech.getSettings(),
+      appClient.study.getPreferences(),
+      refreshDictionary(),
+      speech.refreshPreferences(),
+    ])
+    setTranslationSettings(nextTranslation)
+    setTranslationDraft(nextTranslation.preferences)
+    setSpeechSettings(nextSpeech)
+    setSpeechDraft(nextSpeech.preferences)
+    setStudyPreferences(nextStudyPreferences)
+    setSavedStudyPreferences(nextStudyPreferences)
+  }, [onDataChanged, refreshDictionary, speech])
   useEffect(() => {
     const initialSnapshot = initialSnapshotRef.current
     appClient.settings.getTranslationSettings().then((settings) => {
@@ -785,6 +821,7 @@ function SettingsView({
     try {
       const result = await appClient.data.confirmPortableImport(importPreview.token)
       setImportPreview(null)
+      await refreshExternallyChangedData()
       onNotice(`导入完成：新增 ${result.importedPublications ?? 0} 本，重复 ${result.duplicatePublications ?? 0} 本`)
     } catch (reason) { onError(messageOf(reason)) }
   }
@@ -879,7 +916,7 @@ function SettingsView({
       <button className="settings-back-button" onClick={() => setSection('data')}>← 返回数据与存储</button>
       <div className="settings-card sync-settings-card">
         <div className="setting-heading"><div><h2>跨设备同步</h2><p>在同一局域网内发现另一台外刊阅读器，配对后由当前设备定向发送增量变化。两端都必须保持此页面在前台。</p></div><span className="pill success">wire v2</span></div>
-        <SyncSettingsPanel api={appClient.sync} onError={onError} />
+        <SyncSettingsPanel api={appClient.sync} onDataChanged={refreshExternallyChangedData} onError={onError} />
       </div>
       </>}
       {section === 'data' && <>
@@ -895,7 +932,7 @@ function SettingsView({
           <div className="import-preview">
             <b>{importPreview.fileName}</b>
             <p>{formatBytes(importPreview.totalBytes)} · {importPreview.publicationCount} 本书籍（新增 {importPreview.newPublicationCount}，重复 {importPreview.duplicatePublicationCount}）</p>
-            <p>{importPreview.settingCount} 项设置 · {importPreview.readingPositionCount} 条阅读位置 · {importPreview.vocabularyCount} 个生词 · {importPreview.studyPlanCount} 个计划 · {importPreview.reviewCardCount} 张卡片 · {importPreview.reviewEventCount} 次复习</p>
+            <p>{importPreview.readerRecordCount ?? 0} 条文章记录（位置、标记和保留译文） · {importPreview.settingCount} 项设置 · {importPreview.readingPositionCount} 条阅读位置 · {importPreview.vocabularyCount} 个生词 · {importPreview.studyPlanCount} 个计划 · {importPreview.reviewCardCount} 张卡片 · {importPreview.reviewEventCount} 次复习</p>
             <div className="button-row"><button className="primary-button" onClick={confirmPortableImport}>确认合并</button><button onClick={() => { appClient.data.cancelTransfer(); setImportPreview(null) }}>取消</button></div>
           </div>
         )}

@@ -6,6 +6,7 @@ import type {
   DictionaryLookupRequest,
   LexemeKey,
   SpeechPreferences,
+  SpeechPlaybackState,
   SpeechSettings,
   SpeechSynthesisRequest,
   SpeechUsage,
@@ -41,7 +42,7 @@ export interface MobileTranslationClient {
   saveApiKey(providerId: string, modelId: string, value: string): Promise<ConnectionTestResult>
   deleteApiKey(providerId: string): Promise<TranslationSettings>
   testConnection(): Promise<ConnectionTestResult>
-  translateArticle(articleId: string): Promise<TranslationResult>
+  translateArticle(articleId: string, force?: boolean): Promise<TranslationResult>
   cancel(articleId: string): Promise<void>
   onProgress(callback: (progress: TranslationProgress) => void): () => void
 }
@@ -56,6 +57,9 @@ export interface MobileDictionaryOnlineClient {
 }
 
 export interface MobileSpeechClient {
+  playQueue(request: Omit<SpeechSynthesisRequest,'text'> & {sourceId:string;title:string;items:Array<{id:string;blockId:string;text:string}>;startIndex:number}): Promise<void>
+  getQueueState(): Promise<SpeechPlaybackState & {buffering?:boolean}>
+  seekQueue(index:number): Promise<void>
   getSettings(): Promise<SpeechSettings>
   savePreferences(preferences: SpeechPreferences): Promise<SpeechPreferences>
   saveApiKey(providerId: 'google' | 'minimax', value: string): Promise<ConnectionTestResult>
