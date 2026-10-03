@@ -109,6 +109,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          # The action defaults to the retired SDK package "tools".
+          packages: 'platform-tools platforms;android-36'
       - uses: gradle/actions/setup-gradle@v4
       - name: Generate machine-local Tauri Android support files
         run: node scripts/prepare-android-jvm-ci.mjs

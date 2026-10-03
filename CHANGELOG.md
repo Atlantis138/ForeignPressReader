@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Android 云端 JVM 检查显式安装 `platform-tools` 与 Android 36 平台，避开 `setup-android@v3` 默认请求但已不可用的旧 `tools` 包；不需要恢复本机开发缓存，也不改变 v1.1.0 发布附件和应用代码。
+
 ## 1.1.0 - 2026-10-03
 
 ### Added
