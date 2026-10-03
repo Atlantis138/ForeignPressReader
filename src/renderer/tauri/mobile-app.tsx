@@ -1,5 +1,4 @@
 import type { ContentsSnapshot } from '../reader/use-contents-translation'
-import { ArticleSearch } from '../reader/ReadingTools'
 import { ErrorState } from './mobile-ui'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { StudySessionState } from '../../shared/types'
@@ -244,7 +243,6 @@ export function MobileReadingApp() {
       onDismissSnackbar={() => setSnackbar(null)}
     >
       {route.name === 'library' && !libraryReady && <div className="mobile-page">{libraryError ? <ErrorState description={libraryError} onRetry={() => void reloadLibrary()} /> : <Skeleton lines={8} />}</div>}
-      {route.name === 'library' && libraryReady && <ArticleSearch reader={mobileAppClient.reader} onOpen={(publicationId,articleId)=>navigate({name:'article',publicationId,articleId})} />}
       {route.name === 'library' && libraryReady && <MobileLibrary
         client={mobileAppClient}
         state={libraryState}
@@ -254,6 +252,7 @@ export function MobileReadingApp() {
         onRefresh={() => void reloadLibrary()}
         onImport={() => void importPublication()}
         onOpen={(publicationId) => navigate({ name: 'publication', publicationId })}
+        onOpenArticle={(publicationId, articleId) => navigate({ name: 'article', publicationId, articleId })}
         onError={setError}
         onNotice={setSnackbar}
         overlayCloseSignal={childOverlayCloseSignal}

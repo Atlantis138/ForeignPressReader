@@ -64,7 +64,7 @@ export function SyncChangeDetails({
           {error ? (
             <p role="alert">
               {error}{' '}
-              <button onClick={() => setRetry((value) => value + 1)}>
+              <button className="secondary-button" onClick={() => setRetry((value) => value + 1)}>
                 重试
               </button>
             </p>
@@ -93,12 +93,14 @@ export function SyncChangeDetails({
               </ol>
               <div className="sync-actions">
                 <button
+                  className="secondary-button"
                   disabled={offset === 0}
                   onClick={() => setOffset(Math.max(0, offset - 25))}
                 >
                   上一页
                 </button>
                 <button
+                  className="secondary-button"
                   disabled={offset + page.items.length >= page.total}
                   onClick={() => setOffset(offset + 25)}
                 >

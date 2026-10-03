@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ArticleDetail, ReaderApi } from '../../shared/types'
+import { CloseIcon } from '../ui/icons'
 import type {
   ArticleFilter,
   ArticleReadingChange,
@@ -13,12 +14,15 @@ const messageOf = (reason: unknown) =>
 
 export function ArticleSearch({
   reader,
+  open,
+  onClose,
   onOpen,
 }: {
   reader: ReaderApi
+  open: boolean
+  onClose(): void
   onOpen(publicationId: string, articleId: string): void
 }) {
-  const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
   const [filter, setFilter] = useState<ArticleFilter>('all')
   const [offset, setOffset] = useState(0)
@@ -45,20 +49,22 @@ export function ArticleSearch({
       window.clearTimeout(timer)
     }
   }, [reader, open, text, filter, offset, retry])
+  if (!open) return null
   return (
-    <details
+    <section
       className="reading-search"
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      id="library-article-search"
+      aria-label="查找文章与阅读记录"
     >
-      <summary>
-        查找文章与阅读记录 <span>正文搜索 · 书签 · 阅读状态</span>
-      </summary>
-      {open && (
+      <header className="reading-search-heading">
+        <h2>文章与阅读记录</h2>
+        <button type="button" className="reading-search-close" onClick={onClose} aria-label="收起文章搜索"><CloseIcon /></button>
+      </header>
         <div className="reading-search-body">
           <label className="reading-search-input">
             搜索所有刊物的标题和正文
             <input
+              autoFocus
               type="search"
               value={text}
               placeholder="输入关键词…"
@@ -141,8 +147,7 @@ export function ArticleSearch({
             </>
           )}
         </div>
-      )}
-    </details>
+    </section>
   )
 }
 

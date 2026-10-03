@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ArticleSearch } from '../reader/ReadingTools'
 import type {
   LibraryPreferences,
   LibraryState,
@@ -11,6 +12,7 @@ import {
   ListIcon,
   MoreIcon,
   PlusIcon,
+  SearchIcon,
   SortIcon,
   TrashIcon,
 } from '../ui/icons'
@@ -52,13 +54,14 @@ export function MobileLibrary({
   onRefresh,
   onImport,
   onOpen,
+  onOpenArticle,
   onError,
   onNotice,
   overlayCloseSignal,
   onOverlayOpenChange,
   deferOffscreenCards,
 }: {
-  client: Pick<MobileAppClient, 'library'>
+  client: Pick<MobileAppClient, 'library' | 'reader'>
   state: LibraryState
   selection: LibrarySelectionState
   onSelection(value: LibrarySelectionState): void
@@ -66,6 +69,7 @@ export function MobileLibrary({
   onRefresh(): void
   onImport(): void
   onOpen(publicationId: string): void
+  onOpenArticle(publicationId: string, articleId: string): void
   onError(message: string): void
   onNotice(message: string): void
   overlayCloseSignal: number
@@ -73,6 +77,7 @@ export function MobileLibrary({
   deferOffscreenCards: boolean
 }) {
   const selected = useMemo(() => new Set(selection.selectedIds), [selection.selectedIds])
+  const [searchOpen, setSearchOpen] = useState(false)
   const [actionTarget, setActionTarget] = useState<PublicationSummary | null>(null)
   const [renameTarget, setRenameTarget] = useState<PublicationSummary | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -165,6 +170,7 @@ export function MobileLibrary({
       <section className={`library-command-bar ${selection.mode ? 'selection-active' : ''}`} aria-label="书库管理工具">
         {!selection.mode && <MobileButton onClick={() => onSelection(enterLibrarySelection())}>选择</MobileButton>}
         <div className="library-command-actions">
+          <IconButton label="查找文章与阅读记录" aria-expanded={searchOpen} aria-controls="library-article-search" onClick={() => setSearchOpen((current) => !current)}><SearchIcon /></IconButton>
           <MobileButton onClick={openCategories}><FolderIcon /> 分类</MobileButton>
           <IconButton label="排序" onClick={() => setSortOpen(true)}><SortIcon /></IconButton>
           <IconButton label={state.preferences.viewMode === 'grid' ? '切换到列表' : '切换到网格'} onClick={() => savePreferences({ viewMode: state.preferences.viewMode === 'grid' ? 'list' : 'grid' })}>
@@ -172,6 +178,7 @@ export function MobileLibrary({
           </IconButton>
         </div>
       </section>
+      <ArticleSearch reader={client.reader} open={searchOpen} onClose={() => setSearchOpen(false)} onOpen={onOpenArticle} />
       <nav className="library-category-strip" aria-label="书库分类">
         {[{ id: 'all', name: '全部' }, { id: 'uncategorized', name: '未分类' }, ...state.categories].map((category) => <button
           key={category.id}

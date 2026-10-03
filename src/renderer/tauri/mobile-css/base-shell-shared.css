@@ -450,6 +450,8 @@ input:focus-visible,
 
 .mobile-status-pill {
   display: inline-flex;
+  flex: 0 0 auto;
+  white-space: nowrap;
   min-height: 24px;
   align-items: center;
   border-radius: 999px;

@@ -584,6 +584,28 @@
   white-space: nowrap;
 }
 
+.mobile-app-shell .sync-operation-card.error header > span {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.mobile-app-shell .sync-section-heading > div,
+.mobile-app-shell .sync-device-identity > div,
+.mobile-app-shell .sync-operation-card header > div,
+.mobile-app-shell .sync-incoming-card header > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mobile-app-shell .sync-local-card em,
+.mobile-app-shell .sync-incoming-card header > span,
+.mobile-app-shell .sync-operation-card header > span,
+.mobile-app-shell .sync-section-heading > button,
+.mobile-app-shell .sync-device-row > button,
+.mobile-app-shell .sync-presence {
+  flex-shrink: 0;
+}
+
 .mobile-app-shell .sync-incoming-card dl {
   display: grid;
   grid-template-columns: repeat(2,minmax(0,1fr));
@@ -617,7 +639,16 @@
   width: 100%;
   margin-top: 9px;
   accent-color: var(--accent);
+  appearance: none;
+  height: 7px;
+  border: 0;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--line);
 }
+
+.mobile-app-shell .sync-operation-card progress::-webkit-progress-bar { background: var(--line); }
+.mobile-app-shell .sync-operation-card progress::-webkit-progress-value { background: var(--accent); }
 
 .mobile-app-shell .sync-device-list {
   display: grid;
@@ -651,14 +682,15 @@
   height: 34px;
   place-items: center;
   border-radius: 8px;
-  background: #334353;
-  color: white;
+  background: var(--surface-strong);
+  color: var(--ink);
   font-size: .6875rem;
   font-weight: 800;
 }
 
 .mobile-app-shell .sync-device-icon.android {
-  background: #527356;
+  background: var(--success-soft);
+  color: var(--success);
 }
 
 .mobile-app-shell .sync-empty {

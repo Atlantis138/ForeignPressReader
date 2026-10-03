@@ -1,4 +1,7 @@
 import { useSpeech } from './SpeechProvider'
+import { SpeakerIcon } from '../ui/icons'
+
+export { SpeakerIcon } from '../ui/icons'
 
 export function PronounceButton({
   sourceId,
@@ -31,8 +34,4 @@ export function PronounceButton({
       <SpeakerIcon />
     </button>
   )
-}
-
-export function SpeakerIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.4l4.1 3.4V6.1L7.4 9.5H4Z"/><path d="M15 9a4.4 4.4 0 0 1 0 6M17.6 6.5a7.8 7.8 0 0 1 0 11"/></svg>
 }

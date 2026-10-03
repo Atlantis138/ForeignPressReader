@@ -32,8 +32,7 @@ import { ReaderView as ReaderExperience } from './reader/ReaderView'
 import { DictionaryPage, type DictionaryPageSnapshot } from './dictionary/DictionaryPage'
 import { StudyPage, type StudyPageSnapshot } from './study/StudyPage'
 import { SpeechProvider, useSpeech } from './speech/SpeechProvider'
-import { SpeakerIcon } from './speech/PronounceButton'
-import { AppearanceIcon, CheckIcon, DatabaseIcon, DictionaryIcon, LibraryIcon, PlusIcon, SettingsIcon, StudyIcon, TranslateIcon } from './ui/icons'
+import { AppearanceIcon, CheckIcon, DatabaseIcon, DictionaryIcon, LibraryIcon, PlusIcon, SearchIcon, SettingsIcon, SpeakerIcon, StudyIcon, TranslateIcon } from './ui/icons'
 import { AppLogo } from './ui/app-logo'
 import { ToggleSwitch } from './ui/primitives'
 
@@ -286,9 +285,8 @@ export function App() {
         )}
 
         {activeArea === 'library' && <div className="primary-workspace" data-area="library">
-        {libraryRoute.name === 'library' && <ArticleSearch reader={appClient.reader} onOpen={(publicationId,id)=>navigateLibrary({name:'article',publicationId,id})} />}
         {libraryRoute.name === 'library' && (
-          <LibraryView state={libraryState} snapshot={librarySnapshot} onSnapshot={setLibrarySnapshot} onState={setLibraryState} onImport={importEpub} onOpen={(id) => navigateLibrary({ name: 'publication', id })} onNotice={setNotice} onError={setError} />
+          <LibraryView state={libraryState} snapshot={librarySnapshot} onSnapshot={setLibrarySnapshot} onState={setLibraryState} onImport={importEpub} onOpen={(id) => navigateLibrary({ name: 'publication', id })} onOpenArticle={(publicationId, id) => navigateLibrary({ name: 'article', publicationId, id })} onNotice={setNotice} onError={setError} />
         )}
         {libraryRoute.name === 'publication' && (
           <PublicationView
@@ -340,6 +338,7 @@ function LibraryView({
   onState,
   onImport,
   onOpen,
+  onOpenArticle,
   onNotice,
   onError,
 }: {
@@ -349,10 +348,13 @@ function LibraryView({
   onState(value: LibraryState): void
   onImport(): void
   onOpen(id: string): void
+  onOpenArticle(publicationId: string, articleId: string): void
   onNotice(message: string): void
   onError(message: string): void
 }) {
   const { publications, categories, preferences } = state
+  const [searchOpen, setSearchOpen] = useState(false)
+  const searchTrigger = useRef<HTMLButtonElement>(null)
   const [selectionMode, setSelectionMode] = useState(snapshot.selectionMode)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(snapshot.selectedIds))
   const [newCategoryName, setNewCategoryName] = useState(snapshot.newCategoryName)
@@ -503,6 +505,7 @@ function LibraryView({
           <div className="library-browser">
             <div className="library-toolbar">
               <div className="library-toolbar-group">
+                <button ref={searchTrigger} className="button-with-icon" aria-label="查找文章与阅读记录" aria-expanded={searchOpen} aria-controls="library-article-search" onClick={() => setSearchOpen((current) => !current)}><SearchIcon />文章搜索</button>
                 <button className={selectionMode ? 'active' : ''} onClick={toggleSelectionMode}>{selectionMode ? '退出选择' : '选择'}</button>
                 {selectionMode && <button onClick={selectAll}>{selectedIds.size === visiblePublications.length ? '取消全选' : '全选'}</button>}
               </div>
@@ -512,6 +515,7 @@ function LibraryView({
                 <div className="library-view-switch" aria-label="查看方式"><button className={preferences.viewMode === 'grid' ? 'active' : ''} onClick={() => savePreferences({ viewMode: 'grid' })}>图标</button><button className={preferences.viewMode === 'list' ? 'active' : ''} onClick={() => savePreferences({ viewMode: 'list' })}>列表</button></div>
               </div>
             </div>
+            <ArticleSearch reader={appClient.reader} open={searchOpen} onClose={() => { setSearchOpen(false); searchTrigger.current?.focus() }} onOpen={onOpenArticle} />
             {selectionMode && <div className="library-bulk-bar"><b>已选择 {selectedIds.size} 本</b><label>移动到<select aria-label="批量移动到分类" value="" disabled={selectedIds.size === 0 || working} onChange={(event) => assignSelected(event.target.value)}><option value="" disabled>选择分类</option><option value="__uncategorized__">未分类</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><button className="danger-button" disabled={selectedIds.size === 0 || working} onClick={() => deleteSelected([...selectedIds])}>批量删除</button></div>}
             {visiblePublications.length === 0 ? <div className="library-folder-empty"><h2>这个分类还是空的</h2><p>选择书籍后可以批量移动到这里。</p></div> : preferences.viewMode === 'grid' ? (
               <div className="book-grid managed-book-grid">
