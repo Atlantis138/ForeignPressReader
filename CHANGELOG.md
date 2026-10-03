@@ -49,6 +49,7 @@
 
 ### Verification
 
+- 2026-10-03 Windows x64 `pnpm dist` 与打包协议检查通过；按用户请求覆盖安装到原用户级目录，安装文件与本次构建一致，启动前原数据库校验值未变，已启动新版应用。版本号仍为 1.0.0，详见 [双端对齐验证](docs/cross-platform-parity-2026-10.md)。
 - 2026-10 双端目录缓存与功能对齐：类型/lint、完整 TypeScript 260 项（3 项跳过）、Rust 94 项（1 项忽略）、Clippy、Android ARM64 编译和跨运行时便携互操作通过；真实 Electron 重启缓存读回与移动窄屏/深色界面检查通过。范围及真机限制见 [双端对齐验证](docs/cross-platform-parity-2026-10.md)。
 - Windows 目录与翻译更新：`pnpm typecheck`、`pnpm lint`、`pnpm test` 通过，253 项通过、3 项按环境跳过；长目录返回位置、译文字号及自定义模型交互经 Electron 验证，详见 [验证记录](docs/desktop-translation-validation.md)。
 - 本轮缺陷修复：TypeScript 235 项通过（3 项按环境跳过）、Rust 87 项通过（1 项需要外部词典源文件而忽略）、Android 插件 14 项 JVM 测试通过；类型、lint、备份互操作、协议安全探针及开发启动/重启冒烟通过。范围与人工验证限制见 [项目修复记录](docs/project-repair-2026-09.md)。
