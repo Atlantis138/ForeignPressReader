@@ -21,7 +21,7 @@
 
 ## Android 生命周期
 
-- [ ] release APK 与 `.dev` 并存安装；核对 `com.local.foreignpressreader`、`1.0.0` / `1000006`、仅 `arm64-v8a`、R8、`debuggable=false` 和稳定 release 证书。
+- [ ] release APK 与 `.dev` 并存安装；核对 `com.local.foreignpressreader`、与本次 `tauri.conf.json` 一致的版本号/递增版本码、仅 `arm64-v8a`、R8、`debuggable=false` 和稳定 release 证书。
 - [ ] 正式应用首次启动保持全新空白，不读取、迁移或删除 `.dev` 的 14 本书库与会话状态。
 - [ ] 在当前最低支持真机和当前 API 模拟器上完成安装、冷启动、前后台、强制结束、重启和系统字体/横屏检查。
 - [ ] 在 API 35 模拟器覆盖浅/深主题、360–840 dp、横竖屏、字体 1.0/1.3/1.5、reduced-motion 和 TalkBack 冒烟。

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "外刊阅读器",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "identifier": "com.local.foreignpressreader",
   "build": {
     "frontendDist": "../dist",
@@ -35,7 +35,7 @@
       "icons/icon.ico"
     ],
     "android": {
-      "versionCode": 1000006,
+      "versionCode": 1100000,
       "debugApplicationIdSuffix": ".dev"
     }
   }
