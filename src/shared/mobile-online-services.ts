@@ -14,6 +14,7 @@ import type {
   TranslationProgress,
   TranslationResult,
   TranslationSettings,
+  TranslationApi,
 } from './types'
 
 export const MOBILE_ONLINE_SERVICES_CONTRACT_VERSION = 1 as const
@@ -36,12 +37,13 @@ export type MobileServiceErrorCode =
   | 'audioFocusDenied'
   | 'speechUnavailable'
 
-export interface MobileTranslationClient {
+export interface MobileTranslationClient extends TranslationApi {
+  deleteModel(preferences: TranslationPreferences): Promise<TranslationSettings>
   getSettings(): Promise<TranslationSettings>
   savePreferences(preferences: TranslationPreferences): Promise<TranslationSettings>
   saveApiKey(providerId: string, modelId: string, value: string): Promise<ConnectionTestResult>
   deleteApiKey(providerId: string): Promise<TranslationSettings>
-  testConnection(): Promise<ConnectionTestResult>
+  testConnection(preferences?: TranslationPreferences): Promise<ConnectionTestResult>
   translateArticle(articleId: string, force?: boolean): Promise<TranslationResult>
   cancel(articleId: string): Promise<void>
   onProgress(callback: (progress: TranslationProgress) => void): () => void

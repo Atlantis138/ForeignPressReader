@@ -9,6 +9,8 @@ import { SqliteApplicationRepository } from '../src/main/database'
 import { EpubImporter } from '../src/main/epub-importer'
 import { LibraryService } from '../src/main/library-service'
 import { PublicationFormatRegistry } from '../src/core/importing/publication-formats'
+import { contentsCacheKey } from '../src/core/contents-cache'
+import { FileContentsCache } from '../src/main/contents-cache'
 
 const samplePath = process.env.EPUB_SAMPLE_PATH
 let application: ElectronApplication | null = null
@@ -25,7 +27,7 @@ describe('Electron publication import worker', () => {
     const epubPath = path.join(root, 'compressed.epub')
     let appUnderTest: ElectronApplication | null = null
     try {
-      const zip = await JSZip.loadAsync(await vocabularyEpub())
+      const zip = await JSZip.loadAsync(await contentsEpub())
       fs.writeFileSync(epubPath, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
       appUnderTest = await electron.launch({
         args: ['.'], cwd: process.cwd(), env: { ...process.env, READER_USER_DATA_PATH: root },
@@ -38,12 +40,38 @@ describe('Electron publication import worker', () => {
       await page.locator('.page-header .primary-button').click()
 
       await expect.poll(() => page.locator('.toc-section').count(), { timeout: 30_000 }).toBe(1)
-      await expect.poll(() => page.locator('.toc-section button').count()).toBe(1)
+      await expect.poll(() => page.locator('.toc-section button').count()).toBe(30)
+      fs.mkdirSync(path.join(process.cwd(), 'test-artifacts'), { recursive: true })
+      await page.screenshot({ path: path.join(process.cwd(), 'test-artifacts', 'contents-desktop.png') })
+      await page.locator('.toc-section button').last().scrollIntoViewIfNeeded()
+      const contentsScroll = await page.locator('.main-content').evaluate(element => element.scrollTop)
+      expect(contentsScroll).toBeGreaterThan(500)
+      await page.locator('.toc-section button').last().click()
+      await page.getByRole('button', { name: '目录', exact: true }).click()
+      await expect.poll(() => page.locator('.main-content').evaluate(element => element.scrollTop)).toBeCloseTo(contentsScroll, 0)
+      await page.locator('.app-sidebar nav button').nth(3).click({ force: true })
+      await page.locator('.app-sidebar nav button').nth(0).click({ force: true })
+      await expect.poll(() => page.locator('.main-content').evaluate(element => element.scrollTop)).toBeCloseTo(contentsScroll, 0)
       await expect.poll(() => page.locator('.error-banner').count()).toBe(0)
       expect(fs.existsSync(epubPath)).toBe(true)
       const managedFiles = fs.readdirSync(path.join(root, 'library'), { recursive: true })
         .map((entry) => String(entry).replace(/\\/g, '/'))
       expect(managedFiles.some((entry) => entry === 'source.epub' || entry.endsWith('/source.epub'))).toBe(false)
+      const publication = await page.evaluate(async () => {
+        const state = await window.readerApi.library.getState()
+        return window.readerApi.library.getPublication(state.publications[0].id)
+      })
+      const articleId = [...publication.unsectionedArticles, ...publication.sections.flatMap(section => section.articles)][0].id
+      new FileContentsCache(path.join(root, 'app-cache', 'contents-translations')).write(
+        contentsCacheKey(publication, { providerId: 'deepseek', modelId: 'deepseek-v4-flash' }),
+        { [articleId]: '重启后保留的目录译文' },
+      )
+      await appUnderTest.close()
+      appUnderTest = await electron.launch({ args: ['.'], cwd: process.cwd(), env: { ...process.env, READER_USER_DATA_PATH: root } })
+      const reopened = await appUnderTest.firstWindow()
+      await reopened.waitForLoadState('domcontentloaded')
+      await reopened.locator('.managed-book-card .book-open').click()
+      await expect.poll(() => reopened.getByText('重启后保留的目录译文', { exact: true }).count()).toBe(1)
     } finally {
       await appUnderTest?.close()
       fs.rmSync(root, { recursive: true, force: true })
@@ -60,7 +88,10 @@ describe('vocabulary Electron UI', () => {
       fs.writeFileSync(epubPath, await vocabularyEpub())
       const database = await SqliteApplicationRepository.open(root, 'test')
       const library = new LibraryService(database, epubFormats(), root)
-      await library.importFile(epubPath)
+      const imported = await library.importFile(epubPath)
+      const article = [...imported.publication.unsectionedArticles, ...imported.publication.sections.flatMap(section => section.articles)][0]
+      const block = database.getTranslatableBlocks(article.id).find(item => item.type === 'paragraph')!
+      database.saveTranslation(block.id, block.sourceHash, '这是一段用于验证字号的测试译文。', 'deepseek-v4-flash', 'editorial-zh-v1')
       database.saveSpeechPreferences({
         locale: 'en-US', voiceId: null, rate: 0.9,
         autoPlayStudy: false, wordProviderId: 'system', articleProviderId: 'system',
@@ -107,6 +138,11 @@ describe('vocabulary Electron UI', () => {
       await page.locator('.managed-book-card .book-open').click()
       await page.getByText('America article', { exact: true }).click()
       await expect.poll(() => page.locator('.reader-article').count()).toBe(1)
+      await page.locator('.translation-toggle').first().click()
+      await expect.poll(() => page.locator('.translation-text').evaluate(element => getComputedStyle(element).fontSize)).toBe('20px')
+      await page.getByTitle('增大字号').click()
+      await expect.poll(() => page.locator('.translation-text').evaluate(element => getComputedStyle(element).fontSize)).toBe('21px')
+      await page.getByTitle('减小字号').click()
       const readerScrollTop = await page.evaluate(() => { const article = document.querySelector<HTMLElement>('.reader-article'); const main = document.querySelector<HTMLElement>('.main-content'); if (!main || !article) return 0; article.style.minHeight = '1800px'; main.scrollTop = 120; return main.scrollTop })
       expect(readerScrollTop).toBeGreaterThan(0)
       await page.locator('.app-sidebar nav button').nth(1).click({ force: true })
@@ -185,15 +221,25 @@ describe('vocabulary Electron UI', () => {
       await expect.poll(() => page.locator('.developer-mode-card').count()).toBe(1)
       await page.getByRole('button', { name: '翻译服务' }).click()
       const translationSelects = page.locator('.settings-content select')
-      await expect.poll(() => translationSelects.count()).toBe(2)
+      await expect.poll(() => translationSelects.count()).toBe(1)
       await translationSelects.nth(0).selectOption('openai')
-      await expect.poll(() => translationSelects.nth(1).inputValue()).toBe('gpt-5.4-nano')
+      const translationModel = page.locator('input[list="translation-model-options"]')
+      await expect.poll(() => translationModel.inputValue()).toBe('gpt-5.4-nano')
       await page.getByRole('button', { name: '保存模型选择' }).click()
       await expect.poll(() => page.locator('.toast').innerText()).toContain('翻译模型已保存')
       await translationSelects.nth(0).selectOption('moonshot')
-      await expect.poll(() => translationSelects.nth(1).locator('option').allTextContents()).toEqual([
+      await expect.poll(() => page.locator('#translation-model-options option').allTextContents()).toEqual([
         'Moonshot V1 8K', 'Moonshot V1 32K', 'Moonshot V1 128K', 'Kimi K2.6',
       ])
+      await translationModel.fill('test-custom-model')
+      await page.getByRole('button', { name: '保存模型选择' }).click()
+      await expect.poll(() => page.evaluate(() => window.readerApi.settings.getTranslationSettings().then(value => value.preferences.modelId))).toBe('test-custom-model')
+      await page.locator('.app-sidebar nav button').nth(1).click()
+      await page.locator('.app-sidebar nav button').nth(3).click()
+      await page.getByRole('button', { name: '翻译服务' }).click()
+      await expect.poll(() => translationModel.inputValue()).toBe('test-custom-model')
+      await page.getByRole('button', { name: '删除自定义模型' }).click()
+      await expect.poll(() => translationModel.inputValue()).toBe('gpt-5.4-nano')
       await page.screenshot({ path: path.join(process.cwd(), 'test-artifacts', 'translation-settings.png'), fullPage: false })
       await page.getByRole('button', { name: '语音服务' }).click()
       const autoPronounce = page.getByRole('checkbox', { name: '每日学习卡出现时自动朗读一次' })
@@ -506,5 +552,15 @@ async function vocabularyEpub(): Promise<Buffer> {
   zip.file('EPUB/content.opf', `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Vocabulary Weekly</dc:title><dc:language>en</dc:language></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="article" href="article.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="article"/></spine></package>`)
   zip.file('EPUB/nav.xhtml', `<html xmlns="http://www.w3.org/1999/xhtml"><body><nav epub:type="toc" xmlns:epub="http://www.idpf.org/2007/ops"><ol><li><a href="article.xhtml">America article</a></li></ol></nav></body></html>`)
   zip.file('EPUB/article.xhtml', `<html><head><title>America article</title></head><body><h1>America article</h1><p>America appears here in a sufficiently long editorial sentence that remains useful for vocabulary context testing.</p>${Array.from({ length: 24 }, (_, index) => `<p>This additional paragraph ${index + 1} keeps the synthetic article scrollable while workspace DOM is unmounted and later restored.</p>`).join('')}</body></html>`)
+  return zip.generateAsync({ type: 'nodebuffer' })
+}
+
+async function contentsEpub(): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(await vocabularyEpub())
+  const articles = Array.from({ length: 30 }, (_, index) => ({ id: `article${index}`, title: `Contents headline ${index}` }))
+  zip.file('EPUB/content.opf', `<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Contents Weekly</dc:title></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>${articles.map(article => `<item id="${article.id}" href="${article.id}.xhtml" media-type="application/xhtml+xml"/>`).join('')}</manifest><spine>${articles.map(article => `<itemref idref="${article.id}"/>`).join('')}</spine></package>`)
+  zip.file('EPUB/nav.xhtml', `<html><body><nav epub:type="toc" xmlns:epub="http://www.idpf.org/2007/ops"><ol>${articles.map(article => `<li><a href="${article.id}.xhtml">${article.title}</a></li>`).join('')}</ol></nav></body></html>`)
+  for (const article of articles) zip.file(`EPUB/${article.id}.xhtml`, `<html><body><h1>${article.title}</h1><p>A sufficiently long synthetic paragraph for a directory navigation test.</p></body></html>`)
+  zip.remove('EPUB/article.xhtml')
   return zip.generateAsync({ type: 'nodebuffer' })
 }

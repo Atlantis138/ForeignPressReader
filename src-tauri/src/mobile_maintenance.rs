@@ -118,7 +118,9 @@ pub fn storage_report(
     let dictionary_online = directory_size(&paths.cache.join("dictionary"));
     let temporary = directory_size(&paths.temporary_staging)
         .saturating_add(directory_size(&paths.cache.join("diagnostics")));
+    let contents = directory_size(&paths.cache.join(crate::mobile_online::contents::DIRECTORY));
     let known_cache = speech
+        .saturating_add(contents)
         .saturating_add(dictionary_online)
         .saturating_add(temporary);
     let browser = cache_total.saturating_sub(known_cache);
@@ -203,7 +205,12 @@ pub fn storage_report(
                     dictionary_online,
                     true,
                 ),
-                entry("ai-text", "译文与 AI 文中义", pages.cache, true),
+                entry(
+                    "ai-text",
+                    "目录、正文译文与 AI 文中义",
+                    pages.cache + contents,
+                    true,
+                ),
                 entry("browser", "网络、代码与图形缓存", browser, true),
                 entry("temporary", "临时文件", temporary, true),
             ],

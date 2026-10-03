@@ -85,7 +85,13 @@ pub fn clear_mobile_ai_text_cache(
     };
     {
         let database = state.database()?;
+        for request in state.online_runtime().cancel_all()? {
+            mobile_online::cancel_network(&app, &request);
+        }
         mobile_maintenance::clear_ai_text(&database)?;
+        mobile_online::contents::clear(
+            &state.paths.cache.join(mobile_online::contents::DIRECTORY),
+        )?;
     }
     let report = {
         let database = state.database()?;

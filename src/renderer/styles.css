@@ -248,6 +248,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .toc-section button small { display: block; margin-top: 4px; color: var(--muted); line-height: 1.4; }
 .toc-number { color: var(--muted); font-size: 11px; padding-top: 5px; }
 .toc-arrow { color: var(--accent); }
+.toc-translation { display: block; margin: 6px 0; color: var(--muted-strong); font: 16px/1.7 "Microsoft YaHei", sans-serif; }
 
 .reader-view { min-height: 100%; background: var(--paper); container-type: inline-size; }
 .reader-content-stage { min-height: calc(100% - 62px); padding-right: 0; transition: padding-right .22s cubic-bezier(.2, .7, .2, 1); }
@@ -290,7 +291,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .article-image img { display: block; width: 100%; height: auto; max-height: min(75vh, 680px); object-fit: contain; background: #eeeae2; }
 .has-translation:hover .translation-toggle { opacity: 1; }
 .translation-toggle { display: block; margin: -8px 0 14px; padding: 3px 0; border: 0; background: none; color: var(--accent); font-size: 11px; cursor: pointer; opacity: .64; }
-.translation-text { margin: -2px 0 24px; padding: 16px 18px; border-left: 3px solid var(--accent); background: var(--translation); color: var(--ink); font: 16px/1.8 "Microsoft YaHei", sans-serif; animation: reveal .16s ease-out; }
+.translation-text { margin: -2px 0 24px; padding: 16px 18px; border-left: 3px solid var(--accent); background: var(--translation); color: var(--ink); font: var(--reader-font-size, 20px)/1.8 "Microsoft YaHei", sans-serif; animation: reveal .16s ease-out; }
 @keyframes reveal { from { opacity: 0; transform: translateY(-4px); } }
 .article-end { text-align: center; color: var(--muted); margin-top: 64px; }
 .article-end span { color: var(--accent); }
@@ -382,7 +383,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .pill { border-radius: 99px; padding: 5px 9px; color: var(--muted); background: var(--translation); font-size: 11px; }
 .pill.success { color: #28733b; background: #e2f1e6; }
 .settings-card label { display: grid; gap: 8px; margin: 18px 0; color: var(--muted); font-size: 13px; }
-.settings-card input[type="password"] { width: 100%; padding: 12px; border: 1px solid var(--line); background: var(--canvas); color: var(--ink); outline: none; }
+.settings-card input[type="password"], .settings-card input[list] { width: 100%; padding: 12px; border: 1px solid var(--line); background: var(--canvas); color: var(--ink); outline: none; }
 .settings-card input:focus { border-color: var(--accent); }
 .settings-card select { width: 100%; padding: 12px; border: 1px solid var(--line); background: var(--canvas); color: var(--ink); }
 .speech-settings-card { border-top:4px solid color-mix(in srgb,var(--accent) 62%,#5c78a4); }

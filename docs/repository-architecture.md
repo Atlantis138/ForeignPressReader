@@ -116,6 +116,20 @@ ForeignPressReader/
 
 ## 8. 构建与验证矩阵
 
+### 双端目录缓存与模型配置（2026-10）
+
+- 目录能力是 `AppClient.translation` 必需能力；Electron IPC 与 Android Rust command 分别访问本机存储/模型网络。两个目录界面共用 `useContentsTranslation` 的加载、取消、续译、显示和错误处理。
+- 目录抽取只包含栏目、文章标题和 rubric，不写入正文或正式译文版本。`contents-cache-v1.json` 跨 TypeScript/Rust 向量固定来源/模型/提示词的缓存标识；不改变内容 ID v2。
+- 缓存位于两端各自缓存目录的 `contents-translations`，按 SHA-256 标识写 JSON；单项最多 8 MiB、总量最多 64 MiB，写入后按修改时间清理旧项。逐项原子保存，重启可复用，损坏/不存在时按未缓存处理。安全缓存清理保留它，AI 文本清理删除它并取消在途写入。
+- `local.translation.models` 保存本机自定义模型清单与当前选择。Windows 读取兼容旧 `desktop.translation.models`；新写采用统一键。切回内置模型恢复同步的 `translation.preferences` 路径，删除正在使用的自定义模型回退到最后保存的内置选择。自定义配置不进入便携/同步 allowlist。
+- 两端自定义模型 ID 采用相同字符和数量限制，供应商地址固定，API Key 仍只由原生端密钥存储读取。Android 的正文和目录共用批次重试、去重、截断拆分与取消处理。
+- 目录位置、折叠和译文显示是界面快照；正式文章阅读位置仍持久保存并进入备份/同步。两端文章译文字号都跟随正文设置。
+- 本轮只新增可再生缓存与本机连接配置，未改变正式 migration、便携 format v4、Sync Model v4、LAN Wire v2 或内容 ID v2。
+
+完整盘点、测试和设备验收边界见 [双端对齐验证](cross-platform-parity-2026-10.md)。2026-09 的桌面验证记录保留为历史依据。
+
+### 最低验证要求
+
 | 变化范围 | 最低验证 |
 | --- | --- |
 | 纯 core/contracts | TypeScript 类型检查、单元测试、兼容向量 |

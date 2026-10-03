@@ -200,6 +200,7 @@ export interface SpeechAudio {
 }
 
 export interface TranslationModelOption {
+  custom?: boolean
   id: string
   name: string
   description: string
@@ -739,12 +740,16 @@ export interface SpeechApi {
 }
 
 export interface TranslationApi {
+  getContents(publicationId: string): Promise<Record<string, string>>
+  translateContents(publicationId: string, force?: boolean): Promise<Record<string, string>>
+  cancelContents(publicationId: string): Promise<void>
   translateArticle(articleId: string, force?: boolean): Promise<TranslationResult>
   cancel(articleId: string): Promise<void>
   onProgress(callback: (progress: TranslationProgress) => void): () => void
 }
 
 export interface SettingsApi {
+  deleteTranslationModel?(preferences: TranslationPreferences): Promise<TranslationSettings>
   getTranslationSettings(): Promise<TranslationSettings>
   saveTranslationPreferences(preferences: TranslationPreferences): Promise<TranslationSettings>
   saveProviderKey(providerId: string, key: string): Promise<TranslationSettings>

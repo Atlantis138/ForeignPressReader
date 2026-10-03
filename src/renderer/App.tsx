@@ -1,3 +1,4 @@
+import { PublicationView, type ContentsSnapshot } from './reader/PublicationView'
 import { ArticleSearch } from './reader/ReadingTools'
 import { usePreferenceWriter } from './use-preference-writer'
 
@@ -13,7 +14,6 @@ import type {
   PortableImportPreview,
   TranslationPreferences,
   TranslationSettings,
-  PublicationDetail,
   PublicationSummary,
   ReaderPreferences,
   ImportProgress,
@@ -33,7 +33,7 @@ import { DictionaryPage, type DictionaryPageSnapshot } from './dictionary/Dictio
 import { StudyPage, type StudyPageSnapshot } from './study/StudyPage'
 import { SpeechProvider, useSpeech } from './speech/SpeechProvider'
 import { SpeakerIcon } from './speech/PronounceButton'
-import { AppearanceIcon, ArrowLeftIcon, CheckIcon, DatabaseIcon, DictionaryIcon, LibraryIcon, PlusIcon, SettingsIcon, StudyIcon, TranslateIcon } from './ui/icons'
+import { AppearanceIcon, CheckIcon, DatabaseIcon, DictionaryIcon, LibraryIcon, PlusIcon, SettingsIcon, StudyIcon, TranslateIcon } from './ui/icons'
 import { AppLogo } from './ui/app-logo'
 import { ToggleSwitch } from './ui/primitives'
 
@@ -146,6 +146,11 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null)
+  const contentsSnapshots = useRef(new Map<string, ContentsSnapshot>())
+  const contentsSnapshot = (id: string) => {
+    if (!contentsSnapshots.current.has(id)) contentsSnapshots.current.set(id, { scrollTop: 0, showTranslation: true })
+    return contentsSnapshots.current.get(id)!
+  }
   const areaScrollPositions = useRef<Record<PrimaryArea, number>>({ library: 0, dictionary: 0, study: 0, settings: 0 })
 
   const reloadLibrary = useCallback(async () => {
@@ -190,7 +195,7 @@ export function App() {
   const navigateLibrary = useCallback((next: LibraryRoute) => {
     setPendingLibraryScrollRestore(null)
     setLibraryRoute(next)
-    requestAnimationFrame(() => document.querySelector<HTMLElement>('.main-content')?.scrollTo({ top: 0 }))
+    if (next.name !== 'publication') requestAnimationFrame(() => document.querySelector<HTMLElement>('.main-content')?.scrollTo({ top: 0 }))
   }, [])
 
   useEffect(() => {
@@ -287,6 +292,9 @@ export function App() {
         )}
         {libraryRoute.name === 'publication' && (
           <PublicationView
+            key={libraryRoute.id}
+            client={appClient}
+            snapshot={contentsSnapshot(libraryRoute.id)}
             id={libraryRoute.id}
             onBack={() => navigateLibrary({ name: 'library' })}
             onOpenArticle={(articleId) => navigateLibrary({ name: 'article', id: articleId, publicationId: libraryRoute.id })}
@@ -542,65 +550,6 @@ function LibraryView({
   )
 }
 
-function PublicationView({
-  id,
-  onBack,
-  onOpenArticle,
-  onError,
-}: {
-  id: string
-  onBack(): void
-  onOpenArticle(id: string): void
-  onError(message: string): void
-}) {
-  const [publication, setPublication] = useState<PublicationDetail | null>(null)
-  useEffect(() => {
-    appClient.library.getPublication(id).then(setPublication).catch((reason) => onError(messageOf(reason)))
-  }, [id, onError])
-  if (!publication) return <Loading label="正在整理目录…" />
-
-  return (
-    <section className="page contents-page">
-      <button className="back-button button-with-icon" onClick={onBack}><ArrowLeftIcon />返回书库</button>
-      <div className="publication-hero">
-        {publication.coverUrl && <img src={publication.coverUrl} alt="刊物封面" loading="lazy" decoding="async" />}
-        <div>
-          <p className="eyebrow">ISSUE CONTENTS</p>
-          <h1>{publication.title}</h1>
-          <p>{publication.articleCount} 篇文章，按原刊栏目与阅读顺序整理。</p>
-          {publication.lastArticleId && (
-            <button className="primary-button" onClick={() => onOpenArticle(publication.lastArticleId!)}>继续阅读 →</button>
-          )}
-        </div>
-      </div>
-
-      {publication.unsectionedArticles.length > 0 && (
-        <ArticleList title="开篇" articles={publication.unsectionedArticles} onOpen={onOpenArticle} />
-      )}
-      {publication.sections.map((section) => (
-        <ArticleList key={section.id} title={section.title} articles={section.articles} onOpen={onOpenArticle} />
-      ))}
-    </section>
-  )
-}
-
-function ArticleList({ title, articles, onOpen }: { title: string; articles: PublicationDetail['unsectionedArticles']; onOpen(id: string): void }) {
-  return (
-    <section className="toc-section">
-      <h2><span>{title}</span><small>{articles.length}</small></h2>
-      <div>
-        {articles.map((article, index) => (
-          <button key={article.id} onClick={() => onOpen(article.id)}>
-            <span className="toc-number">{String(index + 1).padStart(2, '0')}</span>
-            <span><b>{article.title}</b>{article.rubric && <small>{article.rubric}</small>}</span>
-            <span className="toc-arrow">→</span>
-          </button>
-        ))}
-      </div>
-    </section>
-  )
-}
-
 function SettingsView({
   preferences,
   snapshot,
@@ -625,6 +574,7 @@ function SettingsView({
   })
   const [key, setKey] = useState('')
   const [testing, setTesting] = useState(false)
+  const [modelWorking, setModelWorking] = useState(false)
   const [dictionaryStatus, setDictionaryStatus] = useState<DictionaryStatus | null>(null)
   const [dictionaryCredentialStatus, setDictionaryCredentialStatus] = useState<DictionaryCredentialStatus | null>(null)
   const [dictionaryPreferences, setDictionaryPreferences] = useState<DictionaryPreferences>({ enabled:true,lookupProviderId:'ecdict',fallbackToLocal:true,contextExplanationEnabled:true,translateExamples:false })
@@ -717,12 +667,24 @@ function SettingsView({
     } catch (reason) { onError(messageOf(reason)) }
   }
   const saveTranslationSelection = async () => {
+    setModelWorking(true)
     try {
-      const settings = await appClient.settings.saveTranslationPreferences(translationDraft)
+      const settings = await appClient.settings.saveTranslationPreferences({ ...translationDraft, modelId: translationDraft.modelId.trim() })
       setTranslationSettings(settings)
       setTranslationDraft(settings.preferences)
       onNotice('翻译模型已保存')
     } catch (reason) { onError(messageOf(reason)) }
+    finally { setModelWorking(false) }
+  }
+  const deleteTranslationModel = async () => {
+    setModelWorking(true)
+    try {
+      const settings = await appClient.settings.deleteTranslationModel!(translationDraft)
+      setTranslationSettings(settings)
+      setTranslationDraft(settings.preferences)
+      onNotice('自定义模型已删除')
+    } catch (reason) { onError(messageOf(reason)) }
+    finally { setModelWorking(false) }
   }
   const saveSpeechProviderKey = async (providerId: RemoteSpeechProviderId) => {
     try {
@@ -960,17 +922,22 @@ function SettingsView({
         <div className="setting-heading"><div><h2>模型翻译</h2><p>可手动选择供应商与模型；每家供应商的密钥独立保存，并使用 Windows DPAPI 保护。</p></div><span className={selectedTranslationProvider?.keyStatus.configured ? 'pill success' : 'pill'}>{selectedTranslationProvider?.keyStatus.configured ? '已配置' : '未配置'}</span></div>
         {translationSettings ? <>
           <label>模型供应商
-            <select value={translationDraft.providerId} onChange={(event) => selectTranslationProvider(event.target.value)}>
+            <select disabled={modelWorking} value={translationDraft.providerId} onChange={(event) => selectTranslationProvider(event.target.value)}>
               {translationSettings.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
             </select>
           </label>
           <label>翻译模型
-            <select value={translationDraft.modelId} onChange={(event) => setTranslationDraft((current) => ({ ...current, modelId: event.target.value }))}>
+            <input list="translation-model-options" disabled={modelWorking} maxLength={100} value={translationDraft.modelId} onChange={(event) => setTranslationDraft((current) => ({ ...current, modelId: event.target.value }))} placeholder="输入供应商提供的模型名称" />
+            <datalist id="translation-model-options">
               {selectedTranslationProvider?.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-            </select>
+            </datalist>
             {selectedTranslationModel && <small>{selectedTranslationModel.description}</small>}
+            <small>可选择已有模型，或填写模型 ID 后保存。自定义模型名称仅保存在本机。</small>
           </label>
-          <div className="button-row translation-selection-actions"><button className="primary-button" disabled={!translationSelectionDirty} onClick={saveTranslationSelection}>保存模型选择</button></div>
+          <div className="button-row translation-selection-actions">
+            <button className="primary-button" disabled={modelWorking || !translationDraft.modelId.trim() || !translationSelectionDirty} onClick={saveTranslationSelection}>保存模型选择</button>
+            <button className="secondary-button" disabled={modelWorking || !selectedTranslationModel?.custom} onClick={deleteTranslationModel}>删除自定义模型</button>
+          </div>
           {selectedTranslationProvider?.keyStatus.configured && <div className="saved-key"><code>{selectedTranslationProvider.keyStatus.masked}</code><button onClick={removeProviderKey}>删除</button></div>}
           <label>{selectedTranslationProvider?.name ?? '供应商'} API Key<input type="password" value={key} onChange={(event) => setKey(event.target.value)} placeholder={selectedTranslationProvider?.keyStatus.configured ? '输入新密钥以替换' : 'sk-…'} /></label>
           <div className="button-row"><button className="primary-button" disabled={!key.trim()} onClick={saveProviderKey}>保存密钥</button><button className="secondary-button" disabled={!selectedTranslationProvider?.keyStatus.configured || testing} onClick={testTranslationConnection}>{testing ? '连接中…' : '测试所选模型'}</button></div>
@@ -1103,10 +1070,6 @@ function SettingsView({
       </div>
     </section>
   )
-}
-
-function Loading({ label }: { label: string }) {
-  return <div className="loading"><span /><p>{label}</p></div>
 }
 
 function messageOf(reason: unknown): string {

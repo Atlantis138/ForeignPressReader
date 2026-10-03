@@ -1,3 +1,4 @@
+import { useContentsTranslation, contentsTranslationLabel, type ContentsSnapshot } from '../reader/use-contents-translation'
 import { ArticleReadingTools } from '../reader/ReadingTools'
 import { ErrorState } from './mobile-ui'
 import {
@@ -56,27 +57,43 @@ import {
 
 export function MobilePublication({
   publication,
+  client,
+  snapshot,
+  onError,
   onBack,
   onOpen,
 }: {
   publication: PublicationDetail
+  client: MobileAppClient['translation']
+  snapshot: ContentsSnapshot
+  onError(message: string): void
   onBack(): void
   onOpen(articleId: string): void
 }) {
+  const root = useRef<HTMLDivElement>(null)
+  const translation = useContentsTranslation(publication.id, client, snapshot, onError)
+  const { complete, label } = contentsTranslationLabel(publication, translation.translations)
   const sections = publication.sections
+  useLayoutEffect(() => {
+    if (!translation.loaded) return
+    const container = root.current?.closest<HTMLElement>('.mobile-scroll')
+    if (!container) return
+    container.scrollTop = snapshot.scrollTop
+    return () => { snapshot.scrollTop = container.scrollTop }
+  }, [translation.loaded, snapshot])
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
-    new Set(),
+    new Set(snapshot.collapsedSections),
   )
-  useEffect(() => setCollapsedSections(new Set()), [publication.id])
   const toggleSection = (sectionId: string) =>
     setCollapsedSections((current) => {
       const next = new Set(current)
       if (next.has(sectionId)) next.delete(sectionId)
       else next.add(sectionId)
+      snapshot.collapsedSections = [...next]
       return next
     })
   return (
-    <div className="mobile-page publication-page">
+    <div ref={root} className="mobile-page publication-page">
       <MobileToolbar title="目录" onBack={onBack} />
       <header className="publication-heading">
         <BookCover title={publication.title} imageUrl={publication.coverUrl} />
@@ -105,10 +122,19 @@ export function MobilePublication({
           继续上次阅读 <ChevronRightIcon />
         </button>
       )}
+      <div className="mobile-service-actions contents-translation-actions">
+        {translation.working
+          ? <MobileButton onClick={translation.cancel}>取消目录翻译</MobileButton>
+          : <MobileButton variant="primary" disabled={!translation.loaded} onClick={() => void translation.translate(complete)}>{label}</MobileButton>}
+        {Object.keys(translation.translations).length > 0 && <MobileButton onClick={translation.toggle}>{translation.showTranslation ? '隐藏目录译文' : '显示目录译文'}</MobileButton>}
+        {translation.failed && <MobileButton onClick={translation.retry}>重新加载目录译文</MobileButton>}
+      </div>
+      {translation.working && <p role="status">正在翻译目录 {translation.progress?.completed ?? 0} / {translation.progress?.total ?? 0}</p>}
       <div className="publication-result-count">完整目录</div>
       {publication.unsectionedArticles.length > 0 && (
         <ArticleList
           articles={publication.unsectionedArticles}
+          translations={translation.visible}
           onOpen={onOpen}
         />
       )}
@@ -128,8 +154,9 @@ export function MobilePublication({
                 {collapsed ? <ChevronDownIcon /> : <ChevronUpIcon />}
               </button>
             </h2>
+            {translation.visible[section.id] && <p className="mobile-toc-translation">{translation.visible[section.id]}</p>}
             {!collapsed && (
-              <ArticleList articles={section.articles} onOpen={onOpen} />
+              <ArticleList articles={section.articles} translations={translation.visible} onOpen={onOpen} />
             )}
           </section>
         )
@@ -140,17 +167,20 @@ export function MobilePublication({
 
 function ArticleList({
   articles,
+  translations,
   onOpen,
 }: {
   articles: PublicationDetail['unsectionedArticles']
+  translations: Record<string, string>
   onOpen(id: string): void
 }) {
   return (
     <div className="article-list">
       {articles.map((article) => (
         <button key={article.id} onClick={() => onOpen(article.id)}>
-          <span>{article.title}</span>
+          <span>{article.title}{translations[article.id] && <span className="mobile-toc-translation">{translations[article.id]}</span>}</span>
           <small>{article.rubric ?? `${article.blockCount} 个内容块`}</small>
+          {translations[`${article.id}:rubric`] && <small className="mobile-toc-translation">{translations[`${article.id}:rubric`]}</small>}
           <ChevronRightIcon />
         </button>
       ))}

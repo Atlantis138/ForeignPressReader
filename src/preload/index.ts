@@ -53,6 +53,9 @@ const api: AppApi = {
     synthesize: (request: SpeechSynthesisRequest) => ipcRenderer.invoke('speech:synthesize', request),
   },
   translation: {
+    getContents: (id) => ipcRenderer.invoke('translation:getContents', id),
+    translateContents: (id, force = false) => ipcRenderer.invoke('translation:translateContents', id, force),
+    cancelContents: (id) => ipcRenderer.invoke('translation:cancelContents', id),
     translateArticle: (articleId, force = false) => ipcRenderer.invoke('translation:translateArticle', articleId, force),
     cancel: (articleId) => ipcRenderer.invoke('translation:cancel', articleId),
     onProgress: (callback) => {
@@ -62,6 +65,7 @@ const api: AppApi = {
     },
   },
   settings: {
+    deleteTranslationModel: (preferences) => ipcRenderer.invoke('settings:deleteTranslationModel', preferences),
     getTranslationSettings: () => ipcRenderer.invoke('settings:getTranslationSettings'),
     saveTranslationPreferences: (preferences) => ipcRenderer.invoke('settings:saveTranslationPreferences', preferences),
     saveProviderKey: (providerId, key) => ipcRenderer.invoke('settings:saveProviderKey', providerId, key),

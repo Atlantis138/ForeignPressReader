@@ -28,7 +28,7 @@ export class StorageService {
   async scan(): Promise<StorageReport> {
     const [userTotal, installTotal, libraryBytes, dictionaryBytes, dictionaryBaseBytes, dictionaryFullBytes,
       dictionaryCacheBytes, speechBytes, networkCacheBytes, codeCacheBytes, graphicsCacheBytes,
-      browserTemporaryBytes, tempBytes] = await Promise.all([
+      browserTemporaryBytes, tempBytes, contentsBytes] = await Promise.all([
       directoryBytes(this.userDataPath),
       app.isPackaged ? directoryBytes(path.dirname(process.execPath), this.userDataPath) : Promise.resolve(0),
       directoryBytes(path.join(this.userDataPath, 'library')),
@@ -42,12 +42,13 @@ export class StorageService {
       sumPaths(this.userDataPath, ['GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache']),
       directoryBytes(path.join(this.userDataPath, 'blob_storage')),
       sumPaths(this.userDataPath, ['imports', 'publication-packages', 'sync-outbox']),
+      directoryBytes(appCachePath(this.userDataPath, 'contents-translations')),
     ])
     const pages = this.databaseStoragePages()
     const secretsBytes = await fileBytes(path.join(this.userDataPath, 'secrets.json'))
     const browserBytes = networkCacheBytes + codeCacheBytes + graphicsCacheBytes + browserTemporaryBytes
     const necessaryRuntime = Math.max(0, userTotal - libraryBytes - dictionaryBytes - dictionaryCacheBytes - speechBytes
-      - browserBytes - tempBytes - pages.resources - pages.cache - pages.user - secretsBytes)
+      - browserBytes - tempBytes - contentsBytes - pages.resources - pages.cache - pages.user - secretsBytes)
     const necessaryEntries: StorageEntry[] = [
       { id: 'application', label: app.isPackaged ? '应用程序与运行组件' : '应用程序（开发环境不计源码与依赖）', bytes: installTotal, clearable: false },
       { id: 'runtime', label: '数据库运行开销与恢复文件', bytes: necessaryRuntime, clearable: false },
@@ -67,7 +68,7 @@ export class StorageService {
       category('cache', '缓存', true, [
         { id: 'speech', label: 'Google / MiniMax 语音音频', bytes: speechBytes, clearable: true },
         { id: 'dictionary-online', label: '百度词典查询缓存', bytes: dictionaryCacheBytes, clearable: true },
-        { id: 'ai-text', label: '译文与 AI 文中义', bytes: pages.cache, clearable: true },
+        { id: 'ai-text', label: '目录、正文译文与 AI 文中义', bytes: pages.cache + contentsBytes, clearable: true },
         { id: 'browser-network', label: '网络响应缓存', bytes: networkCacheBytes, clearable: true },
         { id: 'browser-code', label: '网页代码缓存', bytes: codeCacheBytes, clearable: true },
         { id: 'browser-graphics', label: 'GPU 与图形缓存', bytes: graphicsCacheBytes, clearable: true },
@@ -107,6 +108,7 @@ export class StorageService {
     try {
       db.exec('DELETE FROM translations; DELETE FROM context_definitions; COMMIT;')
     } catch (error) { db.exec('ROLLBACK'); throw error }
+    await fs.promises.rm(appCachePath(this.userDataPath, 'contents-translations'), { recursive: true, force: true })
     db.exec('PRAGMA wal_checkpoint(TRUNCATE); VACUUM;')
     const report = await this.scan()
     return { clearedBytes: Math.max(0, before.totalBytes - report.totalBytes), report }

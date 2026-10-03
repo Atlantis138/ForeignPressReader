@@ -44,6 +44,10 @@ import {
   type TranslationProviderRegistry,
 } from './translation-service'
 import { VocabularyService } from './vocabulary-service'
+import { requireModelId } from './desktop-translation-models'
+import { ContentsTranslationService } from './contents-translation-service'
+import { FileContentsCache } from './contents-cache'
+import { appCachePath } from './app-cache'
 
 export function registerApplicationIpc(
   ipcMain: Pick<IpcMain, 'handle'>,
@@ -65,6 +69,10 @@ export function registerApplicationIpc(
   developer: DeveloperService,
   userDataPath: string,
 ): void {
+  const contents = new ContentsTranslationService(translator, id => db.getPublication(id),
+    () => db.getTranslationPreferences(), progress => {
+      if (!mainWindow.isDestroyed()) mainWindow.webContents.send('translation:progress', progress)
+    }, new FileContentsCache(appCachePath(userDataPath, 'contents-translations')))
   const assertTrustedSender = (url: string): void => {
     if (!isTrustedRendererUrl(url, devServerUrl)) throw new Error('拒绝来自未知页面的请求')
   }
@@ -182,6 +190,24 @@ export function registerApplicationIpc(
     assertTrustedSender(event.senderFrame?.url ?? '')
     if (typeof force !== 'boolean') throw new Error('翻译选项无效')
     return translator.translateArticle(requireId(articleId), force)
+  })
+  ipcMain.handle('translation:getContents', (event, id: unknown) => {
+    assertTrustedSender(event.senderFrame?.url ?? '')
+    return contents.get(requireId(id))
+  })
+  ipcMain.handle('translation:translateContents', (event, id: unknown, force: unknown = false) => {
+    assertTrustedSender(event.senderFrame?.url ?? '')
+    if (typeof force !== 'boolean') throw new Error('无效的重新翻译参数')
+    return contents.translate(requireId(id), force)
+  })
+  ipcMain.handle('translation:cancelContents', (event, id: unknown) => {
+    assertTrustedSender(event.senderFrame?.url ?? '')
+    contents.cancel(requireId(id))
+  })
+  ipcMain.handle('settings:deleteTranslationModel', async (event, input: unknown) => {
+    assertTrustedSender(event.senderFrame?.url ?? '')
+    db.desktopTranslationModels().delete(requireTranslationPreferences(input))
+    return buildTranslationSettings(db, secrets, translationProviders)
   })
   ipcMain.handle('translation:cancel', (event, articleId: unknown) => {
     assertTrustedSender(event.senderFrame?.url ?? '')
@@ -411,7 +437,9 @@ export function registerApplicationIpc(
   })
   ipcMain.handle('storage:clearAiTextCache', (event, token: unknown) => {
     assertTrustedSender(event.senderFrame?.url ?? '')
-    return storage.clearAiTextCache(requireShortText(token, '确认标识'))
+    const confirmation = requireShortText(token, '确认标识')
+    if (confirmation !== 'CLEAR_AI_TEXT_CACHE') throw new Error('清理确认无效')
+    return contents.clearCache(() => storage.clearAiTextCache(confirmation))
   })
   ipcMain.handle('sync:openPage', (event) => { assertTrustedSender(event.senderFrame?.url ?? ''); return lanSync.openPage() })
   ipcMain.handle('sync:closePage', (event) => { assertTrustedSender(event.senderFrame?.url ?? ''); return lanSync.closePage() })
@@ -449,7 +477,7 @@ async function buildTranslationSettings(
   }))
   return {
     preferences: db.getTranslationPreferences(),
-    providers: providers.toOptions(statuses),
+    providers: db.desktopTranslationModels().options(providers.toOptions(statuses)),
   }
 }
 
@@ -532,12 +560,9 @@ function requirePublicationIds(value: unknown): string[] {
 function requireTranslationPreferences(value: unknown): TranslationPreferences {
   if (!value || typeof value !== 'object') throw new Error('无效的翻译设置')
   const input = value as Partial<TranslationPreferences>
-  if (typeof input.modelId !== 'string' || !/^[a-zA-Z0-9._-]{1,100}$/.test(input.modelId)) {
-    throw new Error('无效的翻译模型')
-  }
   return {
     providerId: requireProviderId(input.providerId),
-    modelId: input.modelId,
+    modelId: requireModelId(input.modelId),
   }
 }
 

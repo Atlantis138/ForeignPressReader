@@ -23,6 +23,21 @@ export class TauriMobileTranslationClient implements MobileTranslationClient {
     return this.call('get_mobile_translation_settings')
   }
 
+  getContents(publicationId: string): Promise<Record<string, string>> {
+    return this.call('get_mobile_contents_translation', { publicationId })
+  }
+
+  translateContents(publicationId: string, force = false): Promise<Record<string, string>> {
+    return this.call('translate_mobile_contents', { publicationId, force })
+  }
+
+  cancelContents(publicationId: string): Promise<void> { return this.cancel(publicationId) }
+
+  async deleteModel(preferences: TranslationPreferences): Promise<TranslationSettings> {
+    await this.call('delete_mobile_translation_model', { preferences })
+    return this.getSettings()
+  }
+
   async savePreferences(preferences: TranslationPreferences): Promise<TranslationSettings> {
     await this.call('save_mobile_translation_preferences', { preferences })
     return this.getSettings()
@@ -37,8 +52,8 @@ export class TauriMobileTranslationClient implements MobileTranslationClient {
     return this.getSettings()
   }
 
-  testConnection(): Promise<ConnectionTestResult> {
-    return this.call('test_mobile_translation_connection')
+  testConnection(preferences?: TranslationPreferences): Promise<ConnectionTestResult> {
+    return this.call('test_mobile_translation_connection', preferences ? { preferences } : undefined)
   }
 
   translateArticle(articleId: string, force = false): Promise<TranslationResult> {

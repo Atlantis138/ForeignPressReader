@@ -1,3 +1,4 @@
+import type { ContentsSnapshot } from '../reader/use-contents-translation'
 import { ArticleSearch } from '../reader/ReadingTools'
 import { ErrorState } from './mobile-ui'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -70,6 +71,11 @@ export function MobileReadingApp() {
   const currentRouteKey = routeKey(route)
   const restoredScrollTop = shell.scrollPositions[currentRouteKey] ?? 0
   const scrollRef = useRef<HTMLElement | null>(null)
+  const contentsSnapshots = useRef(new Map<string, ContentsSnapshot>())
+  const contentsSnapshot = (id: string) => {
+    if (!contentsSnapshots.current.has(id)) contentsSnapshots.current.set(id, { scrollTop: restoredScrollTop, showTranslation: true })
+    return contentsSnapshots.current.get(id)!
+  }
   const scrollTimer = useRef<number | null>(null)
   const [appearanceOpen, setAppearanceOpen] = useState(false)
   const [busy, setBusy] = useState(true)
@@ -129,7 +135,7 @@ export function MobileReadingApp() {
   }, [captureScroll, route.name])
 
   useLayoutEffect(() => {
-    if (route.name === 'article') return
+    if (route.name === 'article' || route.name === 'publication') return
     requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: restoredScrollTop }))
   }, [currentRouteKey, restoredScrollTop, route.name])
 
@@ -255,7 +261,7 @@ export function MobileReadingApp() {
         deferOffscreenCards={restoredScrollTop <= 1}
       />}
       {route.name === 'publication' && publication?.id === route.publicationId && (
-        <MobilePublication publication={publication} onBack={goBack} onOpen={(articleId) => {
+        <MobilePublication key={publication.id} publication={publication} client={mobileAppClient.translation} snapshot={contentsSnapshot(publication.id)} onError={setError} onBack={goBack} onOpen={(articleId) => {
           navigate({ name: 'article', publicationId: publication.id, articleId })
         }} />
       )}

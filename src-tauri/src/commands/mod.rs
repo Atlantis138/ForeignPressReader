@@ -62,12 +62,13 @@ pub use model::{
 };
 pub use online_speech::{
     cancel_mobile_translation, delete_mobile_speech_api_key, delete_mobile_translation_api_key,
+    delete_mobile_translation_model, get_mobile_contents_translation,
     get_mobile_speech_queue_state, get_mobile_speech_settings, get_mobile_translation_settings,
     pause_mobile_speech, play_mobile_speech, resume_mobile_speech, save_mobile_speech_api_key,
     save_mobile_speech_preferences, save_mobile_translation_api_key,
     save_mobile_translation_preferences, seek_mobile_speech_queue, start_mobile_speech_queue,
     stop_mobile_speech, test_mobile_speech_connection, test_mobile_translation_connection,
-    translate_mobile_article,
+    translate_mobile_article, translate_mobile_contents,
 };
 pub use platform::get_platform_info;
 pub use reading::{

@@ -19,6 +19,8 @@
 
 源码中的新增功能：按文章恢复进度、书签/已读筛选与全库正文搜索；同一原始 EPUB 再次导入可补回旧解析遗漏；Android 文章朗读支持切后台、锁屏和通知控制。两端升级后才能使用新版局域网同步。
 
+Windows 与 Android 源码均支持翻译刊物目录并在重启后复用本机缓存、返回目录时恢复位置、译文跟随正文字号，以及保存和删除本机自定义翻译模型。
+
 ## 下载与安装
 
 请从 [GitHub Releases](https://github.com/Atlantis138/ForeignPressReader/releases/latest) 下载：

@@ -162,12 +162,16 @@ function MobileTranslationSettings({
         const next = settings.providers.find((item) => item.id === event.target.value)!
         setProviderId(next.id); setModelId(next.models[0].id)
       }}>{settings.providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label>翻译模型<select value={modelId} disabled={busy} onChange={(event) => setModelId(event.target.value)}>{provider.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label>
-      <p className="settings-help">{provider.models.find((model) => model.id === modelId)?.description}</p>
+      <label>翻译模型<select value={provider.models.some(model => model.id === modelId) ? modelId : ""} disabled={busy} onChange={(event) => setModelId(event.target.value)}><option value="" disabled>自定义模型</option>{provider.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label>
+      <label>模型 ID<input aria-label="模型 ID" value={modelId} disabled={busy} maxLength={100} autoCapitalize="none" autoCorrect="off" spellCheck={false} onChange={event => setModelId(event.target.value)} /></label>
+      <p className="settings-help">可选择已有模型，或填写模型 ID 后保存。自定义模型仅保存在本机。</p>
       <MobileButton variant="primary" disabled={busy} onClick={() => void commit(
         () => client.savePreferences({ providerId, modelId }),
         '模型选择已保存。',
       )}>保存模型选择</MobileButton>
+      <MobileButton disabled={busy || !provider.models.find(model => model.id === modelId)?.custom} onClick={() => void commit(
+        () => client.deleteModel({ providerId, modelId }), '自定义模型已删除。',
+      )}>删除自定义模型</MobileButton>
     </EditorialCard>
     <EditorialCard className="mobile-service-card">
       <div className="mobile-service-heading"><div><h2>{provider.name} API Key</h2><p>保存前会执行一次极小的真实结构化请求，因此会产生极少量用量。</p></div>{provider.keyStatus.masked && <code>{provider.keyStatus.masked}</code>}</div>
@@ -179,7 +183,7 @@ function MobileTranslationSettings({
           setKey('')
         }, '密钥已验证并安全保存。')}>保存并测试</MobileButton>
         <MobileButton disabled={busy || !provider.keyStatus.configured} onClick={() => void commit(async () => {
-          const result = await client.testConnection()
+          const result = await client.testConnection({ providerId, modelId })
           if (!result.ok) throw new Error(result.message)
           onNotice(result.message)
         }, '连接测试完成。')}>测试所选模型</MobileButton>

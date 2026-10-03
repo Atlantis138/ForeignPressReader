@@ -9,10 +9,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashSet, VecDeque},
     time::Duration,
 };
 use tauri::{AppHandle, Emitter};
+
+pub mod contents;
+mod models;
+pub use models::delete_model;
 
 pub const TRANSLATION_PROMPT_VERSION: &str = "editorial-zh-v1";
 
@@ -96,9 +100,9 @@ const MOONSHOT_MODELS: &[ModelDef] = &[
 ];
 
 #[derive(Debug, Clone, Copy)]
-struct ModelDef {
-    id: &'static str,
-    name: &'static str,
+struct ModelDef<'a> {
+    id: &'a str,
+    name: &'a str,
     max_blocks: usize,
     max_characters: usize,
     max_completion_tokens: u64,
@@ -106,10 +110,10 @@ struct ModelDef {
     disable_thinking: bool,
 }
 
-impl ModelDef {
+impl<'a> ModelDef<'a> {
     const fn new(
-        id: &'static str,
-        name: &'static str,
+        id: &'a str,
+        name: &'a str,
         max_blocks: usize,
         max_characters: usize,
         max_completion_tokens: u64,
@@ -133,7 +137,7 @@ struct ProviderDef {
     id: &'static str,
     name: &'static str,
     url: &'static str,
-    models: &'static [ModelDef],
+    models: &'static [ModelDef<'static>],
 }
 
 const PROVIDERS: &[ProviderDef] = &[
@@ -174,9 +178,10 @@ pub struct KeyStatus {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationModelOption {
-    pub id: &'static str,
-    pub name: &'static str,
+    pub id: String,
+    pub name: String,
     pub description: &'static str,
+    pub custom: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -233,6 +238,9 @@ struct SourceSegment {
 pub fn get_preferences(
     database: &AndroidDatabase,
 ) -> Result<TranslationPreferences, PlatformError> {
+    if let Some(selected) = models::read(database)?.selected.filter(valid_preferences) {
+        return Ok(selected);
+    }
     let value = database
         .connection()
         .query_row(
@@ -252,20 +260,7 @@ pub fn save_preferences(
     database: &AndroidDatabase,
     value: TranslationPreferences,
 ) -> Result<TranslationPreferences, PlatformError> {
-    if !valid_preferences(&value) {
-        return Err(PlatformError::new(
-            "invalidInput",
-            "翻译服务或模型无效。",
-            false,
-        ));
-    }
-    let encoded =
-        serde_json::to_string(&value).map_err(|_| PlatformError::storage_unavailable())?;
-    database.connection().execute(
-        "INSERT INTO settings(key,value,updated_at,device_id) VALUES('translation.preferences',?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,device_id=excluded.device_id",
-        params![encoded, Utc::now().to_rfc3339(), database.device_id()],
-    ).map_err(|_| PlatformError::storage_unavailable())?;
-    Ok(value)
+    models::save(database, value)
 }
 
 pub fn cache_model(preferences: &TranslationPreferences) -> Result<String, PlatformError> {
@@ -282,6 +277,7 @@ pub fn settings(
     database: &AndroidDatabase,
 ) -> Result<TranslationSettings, PlatformError> {
     let preferences = get_preferences(database)?;
+    let config = models::read(database)?;
     let providers = PROVIDERS
         .iter()
         .map(|provider| {
@@ -297,14 +293,33 @@ pub fn settings(
                     .models
                     .iter()
                     .map(|model| TranslationModelOption {
-                        id: model.id,
-                        name: model.name,
+                        id: model.id.into(),
+                        name: model.name.into(),
+                        custom: false,
                         description: if model.id == "moonshot-v1-8k" {
                             "短批次、低成本"
                         } else {
                             "适合文章与词义服务"
                         },
                     })
+                    .chain(
+                        config
+                            .models
+                            .iter()
+                            .filter(|item| {
+                                item.provider_id == provider.id
+                                    && !provider
+                                        .models
+                                        .iter()
+                                        .any(|model| model.id == item.model_id)
+                            })
+                            .map(|item| TranslationModelOption {
+                                id: item.model_id.clone(),
+                                name: item.model_id.clone(),
+                                description: "自定义模型 · 仅本机",
+                                custom: true,
+                            }),
+                    )
                     .collect(),
             }
         })
@@ -484,7 +499,6 @@ pub fn translate_article(
     preferences: &TranslationPreferences,
     force: bool,
 ) -> Result<TranslationResult, PlatformError> {
-    let (provider, model) = resolve(preferences)?;
     let cache_model = cache_model(preferences)?;
     let (title, section_title, all, missing) = {
         let database = state.database()?;
@@ -529,102 +543,16 @@ pub fn translate_article(
             cached: true,
         });
     }
-    let mut completed = all.len() - missing.len();
-    emit_progress(app, article_id, completed, all.len(), "started", None);
-    let mut batches: VecDeque<Vec<SourceSegment>> = make_batches(missing, model).into();
-    while let Some(batch) = batches.pop_front() {
-        let messages = vec![
-            json!({"role":"system","content":"你是严谨的英中杂志翻译。保持作者语气、专名、数字、限定语和逻辑关系，不添加解释，不遗漏信息。只返回 JSON 对象：{\"segments\":[{\"blockId\":\"原ID\",\"translation\":\"译文\"}]}。每个输入 blockId 必须且只能出现一次。"}),
-            json!({"role":"user","content":serde_json::to_string(&json!({"articleTitle":title,"sectionTitle":section_title,"segments":batch.iter().map(|segment| json!({"blockId":segment.id,"type":segment.kind,"text":segment.text})).collect::<Vec<_>>() })).unwrap_or_default()}),
-        ];
-        let body = completion_body(model, model.max_completion_tokens, messages);
-        let (status, outer) = request_json_with_id(
-            app,
-            request_id,
-            provider.url,
-            key,
-            &body,
-            60_000,
-            4 * 1024 * 1024,
-        )?;
-        if status == 401 || status == 403 {
-            return Err(PlatformError::new(
-                "secretRejected",
-                "API Key 无效或账户无权访问该模型。",
-                false,
-            ));
-        }
-        if !(200..300).contains(&status) {
-            return Err(PlatformError::new(
-                "serviceUnavailable",
-                "翻译服务暂时不可用。",
-                status == 429 || status >= 500,
-            ));
-        }
-        if outer
-            .pointer("/choices/0/finish_reason")
-            .and_then(Value::as_str)
-            == Some("length")
-        {
-            if batch.len() == 1 {
-                return Err(PlatformError::new(
-                    "responseTruncated",
-                    "模型返回内容被截断，请稍后重试。",
-                    true,
-                ));
-            }
-            let middle = batch.len().div_ceil(2);
-            batches.push_front(batch[middle..].to_vec());
-            batches.push_front(batch[..middle].to_vec());
-            continue;
-        }
-        let content = outer
-            .pointer("/choices/0/message/content")
-            .and_then(Value::as_str)
-            .ok_or_else(|| PlatformError::new("invalidResponse", "模型返回了空内容。", true))?;
-        let parsed: Value = serde_json::from_str(strip_fence(content))
-            .map_err(|_| PlatformError::new("invalidResponse", "模型返回格式不正确。", true))?;
-        let translated = parsed
-            .get("segments")
-            .and_then(Value::as_array)
-            .ok_or_else(|| PlatformError::new("invalidResponse", "模型返回格式不正确。", true))?;
-        let sources: HashMap<&str, &SourceSegment> = batch
-            .iter()
-            .map(|segment| (segment.id.as_str(), segment))
-            .collect();
-        let mut saved = 0;
-        {
+    let completed = TranslationTask { app, state, id: article_id, request_id, key, preferences,
+        title: &title, section: section_title.as_deref(), total: all.len() }.run(missing, |source, translation| {
             let database = state.database()?;
-            for item in translated {
-                let block_id = item.get("blockId").and_then(Value::as_str).unwrap_or("");
-                let translation = item
-                    .get("translation")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .trim();
-                let Some(source) = sources.get(block_id) else {
-                    continue;
-                };
-                if translation.is_empty() {
-                    continue;
-                }
-                database.connection().execute(
-                    "INSERT OR REPLACE INTO translations(block_id,source_hash,target_language,model,prompt_version,text,created_at) VALUES(?1,?2,'zh-CN',?3,?4,?5,?6)",
-                    params![source.id, source.source_hash, cache_model, TRANSLATION_PROMPT_VERSION, translation, Utc::now().to_rfc3339()],
-                ).map_err(|_| PlatformError::storage_unavailable())?;
-                completed += 1;
-                saved += 1;
-                emit_progress(app, article_id, completed, all.len(), "progress", None);
-            }
-        }
-        if saved != batch.len() {
-            return Err(PlatformError::new(
-                "invalidResponse",
-                "模型未返回全部段落译文，可稍后重试。",
-                true,
-            ));
-        }
-    }
+            state.online_runtime().check_translation(article_id, request_id)?;
+            database.connection().execute(
+                "INSERT OR REPLACE INTO translations(block_id,source_hash,target_language,model,prompt_version,text,created_at) VALUES(?1,?2,'zh-CN',?3,?4,?5,?6)",
+                params![source.id, source.source_hash, cache_model, TRANSLATION_PROMPT_VERSION, translation, Utc::now().to_rfc3339()],
+            ).map_err(|_| PlatformError::storage_unavailable())?;
+            Ok(())
+        })?;
     {
         let database = state.database()?;
         crate::reader_records::preserve(&database, article_id)?;
@@ -636,6 +564,179 @@ pub fn translate_article(
         total: all.len(),
         cached: false,
     })
+}
+
+struct TranslationTask<'a> {
+    app: &'a AppHandle,
+    state: &'a PlatformState,
+    id: &'a str,
+    request_id: &'a str,
+    key: &'a str,
+    preferences: &'a TranslationPreferences,
+    title: &'a str,
+    section: Option<&'a str>,
+    total: usize,
+}
+
+impl TranslationTask<'_> {
+    fn run(
+        &self,
+        missing: Vec<SourceSegment>,
+        mut save: impl FnMut(&SourceSegment, &str) -> Result<(), PlatformError>,
+    ) -> Result<usize, PlatformError> {
+        let (provider, model) = resolve(self.preferences)?;
+        let mut completed = self.total - missing.len();
+        emit_progress(self.app, self.id, completed, self.total, "started", None);
+        translate_batches(
+            model,
+            missing,
+            |batch| {
+                let body = completion_body(
+                    model,
+                    model.max_completion_tokens,
+                    vec![
+                        json!({"role":"system","content":"你是严谨的英中杂志翻译。将英文翻译为自然、准确、适合阅读的简体中文。保持作者语气、专名、数字、限定语和逻辑关系，不添加解释，不遗漏信息。只返回 JSON 对象：{\"segments\":[{\"blockId\":\"原ID\",\"translation\":\"译文\"}]}。每个输入 blockId 必须且只能出现一次。"}),
+                        json!({"role":"user","content":serde_json::to_string(&json!({"articleTitle":self.title,"sectionTitle":self.section,"segments":batch.iter().map(|segment| json!({"blockId":segment.id,"type":segment.kind,"text":segment.text})).collect::<Vec<_>>() })).unwrap_or_default()}),
+                    ],
+                );
+                let mut last =
+                    PlatformError::new("serviceUnavailable", "翻译服务暂时不可用。", true);
+                for attempt in 0..3 {
+                    self.state
+                        .online_runtime()
+                        .check_translation(self.id, self.request_id)?;
+                    let response = request_json_with_id(
+                        self.app,
+                        self.request_id,
+                        provider.url,
+                        self.key,
+                        &body,
+                        60_000,
+                        4 * 1024 * 1024,
+                    );
+                    self.state
+                        .online_runtime()
+                        .check_translation(self.id, self.request_id)?;
+                    let result = response.and_then(parse_translation_response);
+                    match result {
+                        Ok(value) => return Ok(value),
+                        Err(error) if !error.retryable || error.code == "responseTruncated" => {
+                            return Err(error)
+                        }
+                        Err(error) => last = error,
+                    }
+                    if attempt < 2 {
+                        // Check cancellation throughout retry backoff, including after native requests end.
+                        for _ in 0..if attempt == 0 { 10 } else { 30 } {
+                            self.state
+                                .online_runtime()
+                                .check_translation(self.id, self.request_id)?;
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                    }
+                }
+                Err(last)
+            },
+            |source, text| {
+                save(source, text)?;
+                completed += 1;
+                emit_progress(self.app, self.id, completed, self.total, "progress", None);
+                Ok(())
+            },
+        )?;
+        Ok(completed)
+    }
+}
+
+fn parse_translation_response(
+    (status, outer): (u16, Value),
+) -> Result<Vec<(String, String)>, PlatformError> {
+    if status == 401 || status == 403 {
+        return Err(PlatformError::new(
+            "secretRejected",
+            "API Key 无效或账户无权访问该模型。",
+            false,
+        ));
+    }
+    if !(200..300).contains(&status) {
+        return Err(PlatformError::new(
+            "serviceUnavailable",
+            "翻译服务暂时不可用。",
+            status == 429 || status >= 500,
+        ));
+    }
+    if outer
+        .pointer("/choices/0/finish_reason")
+        .and_then(Value::as_str)
+        == Some("length")
+    {
+        return Err(PlatformError::new(
+            "responseTruncated",
+            "模型返回内容被截断，请稍后重试。",
+            true,
+        ));
+    }
+    let invalid = || PlatformError::new("invalidResponse", "模型返回格式不正确。", true);
+    let content = outer
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    let parsed: Value = serde_json::from_str(strip_fence(content)).map_err(|_| invalid())?;
+    Ok(parsed
+        .get("segments")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid)?
+        .iter()
+        .filter_map(|item| {
+            Some((
+                item.get("blockId")?.as_str()?.into(),
+                item.get("translation")?.as_str()?.trim().into(),
+            ))
+        })
+        .collect())
+}
+
+fn translate_batches(
+    model: ModelDef,
+    segments: Vec<SourceSegment>,
+    mut request: impl FnMut(&[SourceSegment]) -> Result<Vec<(String, String)>, PlatformError>,
+    mut save: impl FnMut(&SourceSegment, &str) -> Result<(), PlatformError>,
+) -> Result<(), PlatformError> {
+    let mut batches: VecDeque<_> = make_batches(segments, model).into();
+    while let Some(mut remaining) = batches.pop_front() {
+        let mut round = 0;
+        while round < 3 && !remaining.is_empty() {
+            let translated = match request(&remaining) {
+                Err(error) if error.code == "responseTruncated" && remaining.len() > 1 => {
+                    let middle = remaining.len().div_ceil(2);
+                    batches.push_front(remaining.split_off(middle));
+                    round = 0;
+                    continue;
+                }
+                value => value?,
+            };
+            let mut received = HashSet::new();
+            for (id, text) in translated {
+                if text.trim().is_empty() || received.contains(&id) {
+                    continue;
+                }
+                if let Some(source) = remaining.iter().find(|source| source.id == id) {
+                    save(source, text.trim())?;
+                    received.insert(id);
+                }
+            }
+            remaining.retain(|source| !received.contains(&source.id));
+            round += 1;
+        }
+        if !remaining.is_empty() {
+            return Err(PlatformError::new(
+                "invalidResponse",
+                "模型未返回全部译文，可稍后重试。",
+                true,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn make_batches(segments: Vec<SourceSegment>, model: ModelDef) -> Vec<Vec<SourceSegment>> {
@@ -669,14 +770,26 @@ fn completion_body(model: ModelDef, completion_tokens: u64, messages: Vec<Value>
     body
 }
 
-fn resolve(value: &TranslationPreferences) -> Result<(ProviderDef, ModelDef), PlatformError> {
+fn resolve(value: &TranslationPreferences) -> Result<(ProviderDef, ModelDef<'_>), PlatformError> {
     let provider = provider(&value.provider_id)?;
     let model = provider
         .models
         .iter()
         .find(|model| model.id == value.model_id)
         .copied()
-        .ok_or_else(|| PlatformError::new("invalidInput", "翻译模型无效。", false))?;
+        .unwrap_or(ModelDef::new(
+            models::require_model_id(&value.model_id)?,
+            &value.model_id,
+            6,
+            4_000,
+            4_096,
+            if provider.id == "openai" {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            },
+            false,
+        ));
     Ok((provider, model))
 }
 
@@ -930,12 +1043,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retries_omissions_ignores_duplicate_ids_and_splits_truncated_batches() {
+        let source = (0..3)
+            .map(|index| SourceSegment {
+                id: index.to_string(),
+                kind: "title".into(),
+                text: "Headline".into(),
+                source_hash: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let preferences = default_preferences();
+        let (_, model) = resolve(&preferences).unwrap();
+        let mut calls = 0;
+        let mut saved = Vec::new();
+        translate_batches(
+            model,
+            source.clone(),
+            |remaining| {
+                calls += 1;
+                if calls == 1 {
+                    return Err(PlatformError::new("responseTruncated", "截断", true));
+                }
+                if calls == 2 {
+                    return Ok(vec![
+                        (remaining[0].id.clone(), "第一项".into()),
+                        (remaining[0].id.clone(), "重复".into()),
+                        ("unknown".into(), "不应保存".into()),
+                    ]);
+                }
+                Ok(remaining
+                    .iter()
+                    .map(|item| (item.id.clone(), "译文".into()))
+                    .collect())
+            },
+            |source, text| {
+                saved.push((source.id.clone(), text.to_owned()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, 4);
+        assert_eq!(saved.len(), 3);
+        assert_eq!(saved[0].1, "第一项");
+        let mut calls = 0;
+        let error = translate_batches(
+            model,
+            source,
+            |_| {
+                calls += 1;
+                Ok(vec![])
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalidResponse");
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
     fn keeps_kimi_8k_batches_inside_the_reduced_budget() {
-        let (_, model) = resolve(&TranslationPreferences {
+        let preferences = TranslationPreferences {
             provider_id: "moonshot".into(),
             model_id: "moonshot-v1-8k".into(),
-        })
-        .unwrap();
+        };
+        let (_, model) = resolve(&preferences).unwrap();
         let source = (0..7)
             .map(|index| SourceSegment {
                 id: index.to_string(),

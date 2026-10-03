@@ -15,6 +15,38 @@ pub struct OnlineServiceRuntime {
 }
 
 impl OnlineServiceRuntime {
+    pub fn check_translation(&self, id: &str, request_id: &str) -> Result<(), PlatformError> {
+        if self.translation_request(id)?.as_deref() != Some(request_id) {
+            return Err(PlatformError::new(
+                "networkCancelled",
+                "翻译已取消。",
+                false,
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn cancel_translation(&self, id: &str) -> Result<Option<String>, PlatformError> {
+        let mut jobs = self
+            .translations
+            .lock()
+            .map_err(|_| PlatformError::storage_unavailable())?;
+        Ok(jobs
+            .get_mut(id)
+            .map(|value| std::mem::replace(value, "!cancelled".into())))
+    }
+
+    pub fn cancel_all(&self) -> Result<Vec<String>, PlatformError> {
+        let mut jobs = self
+            .translations
+            .lock()
+            .map_err(|_| PlatformError::storage_unavailable())?;
+        Ok(jobs
+            .values_mut()
+            .map(|value| std::mem::replace(value, "!cancelled".into()))
+            .collect())
+    }
+
     pub fn begin_translation(&self, article_id: &str) -> Result<(), PlatformError> {
         let mut jobs = self
             .translations
@@ -37,6 +69,13 @@ impl OnlineServiceRuntime {
             .lock()
             .map_err(|_| PlatformError::new("internal", "在线服务暂时不可用。", true))?;
         if let Some(value) = jobs.get_mut(article_id) {
+            if value == "!cancelled" {
+                return Err(PlatformError::new(
+                    "networkCancelled",
+                    "翻译已取消。",
+                    false,
+                ));
+            }
             *value = request_id.to_owned();
         }
         Ok(())
@@ -171,5 +210,27 @@ impl PlatformState {
 
     pub fn sync_runtime(&self) -> &MobileSyncRuntime {
         &self.sync_runtime
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_survives_key_retrieval_and_cache_clear_until_job_finishes() {
+        let runtime = OnlineServiceRuntime::default();
+        runtime.begin_translation("contents").unwrap();
+        runtime.cancel_translation("contents").unwrap();
+        assert!(runtime.set_translation_request("contents", "late").is_err());
+        assert!(runtime.begin_translation("contents").is_err());
+        runtime.finish_translation("contents");
+        runtime.begin_translation("contents").unwrap();
+        runtime
+            .set_translation_request("contents", "active")
+            .unwrap();
+        runtime.check_translation("contents", "active").unwrap();
+        assert_eq!(runtime.cancel_all().unwrap(), vec!["active"]);
+        assert!(runtime.check_translation("contents", "active").is_err());
     }
 }

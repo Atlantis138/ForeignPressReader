@@ -1,6 +1,67 @@
 use super::*;
 
 #[tauri::command]
+pub fn get_mobile_contents_translation(
+    state: tauri::State<'_, PlatformState>,
+    publication_id: String,
+) -> Result<mobile_online::contents::Translations, PlatformError> {
+    mobile_online::contents::get(&state, &publication_id)
+}
+
+#[tauri::command]
+pub async fn translate_mobile_contents(
+    app: tauri::AppHandle,
+    publication_id: String,
+    force: Option<bool>,
+) -> Result<mobile_online::contents::Translations, PlatformError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+        let state = app.state::<PlatformState>();
+        state.online_runtime().begin_translation(&publication_id)?;
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let result = (|| {
+            state
+                .online_runtime()
+                .set_translation_request(&publication_id, &request_id)?;
+            mobile_online::contents::translate(
+                &app,
+                &state,
+                &publication_id,
+                &request_id,
+                force.unwrap_or(false),
+            )
+        })();
+        state.online_runtime().finish_translation(&publication_id);
+        if let Err(error) = &result {
+            mobile_online::emit_progress(
+                &app,
+                &publication_id,
+                0,
+                0,
+                if error.code == "networkCancelled" {
+                    "cancelled"
+                } else {
+                    "error"
+                },
+                Some(error.message),
+            );
+        }
+        result
+    })
+    .await
+    .map_err(|_| PlatformError::storage_unavailable())?
+}
+
+#[tauri::command]
+pub fn delete_mobile_translation_model(
+    state: tauri::State<'_, PlatformState>,
+    preferences: TranslationPreferences,
+) -> Result<(), PlatformError> {
+    let database = state.database()?;
+    mobile_online::delete_model(&database, preferences)
+}
+
+#[tauri::command]
 pub fn get_mobile_translation_settings(
     app: tauri::AppHandle,
     state: tauri::State<'_, PlatformState>,
@@ -40,8 +101,11 @@ pub fn delete_mobile_translation_api_key(
 pub fn test_mobile_translation_connection(
     app: tauri::AppHandle,
     state: tauri::State<'_, PlatformState>,
+    preferences: Option<TranslationPreferences>,
 ) -> Result<mobile_online::ConnectionTestResult, PlatformError> {
-    let preferences = {
+    let preferences = if let Some(preferences) = preferences {
+        preferences
+    } else {
         let database = state.database()?;
         mobile_online::get_preferences(&database)?
     };
@@ -51,41 +115,46 @@ pub fn test_mobile_translation_connection(
 #[tauri::command]
 pub async fn translate_mobile_article(
     app: tauri::AppHandle,
-    state: tauri::State<'_, PlatformState>,
     article_id: String,
     force: Option<bool>,
 ) -> Result<mobile_online::TranslationResult, PlatformError> {
-    state.online_runtime().begin_translation(&article_id)?;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    state
-        .online_runtime()
-        .set_translation_request(&article_id, &request_id)?;
-    let result = (|| {
-        let preferences = {
-            let database = state.database()?;
-            mobile_online::get_preferences(&database)?
-        };
-        let key = mobile_online::translation_key(&app, &preferences)?;
-        mobile_online::translate_article(
-            &app,
-            &state,
-            &article_id,
-            &request_id,
-            &key,
-            &preferences,
-            force.unwrap_or(false),
-        )
-    })();
-    state.online_runtime().finish_translation(&article_id);
-    if let Err(error) = &result {
-        let status = if error.code == "networkCancelled" {
-            "cancelled"
-        } else {
-            "error"
-        };
-        mobile_online::emit_progress(&app, &article_id, 0, 0, status, Some(error.message));
-    }
-    result
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+        let state = app.state::<PlatformState>();
+        state.online_runtime().begin_translation(&article_id)?;
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let result = (|| {
+            state
+                .online_runtime()
+                .set_translation_request(&article_id, &request_id)?;
+            let preferences = {
+                let database = state.database()?;
+                mobile_online::get_preferences(&database)?
+            };
+            let key = mobile_online::translation_key(&app, &preferences)?;
+            mobile_online::translate_article(
+                &app,
+                &state,
+                &article_id,
+                &request_id,
+                &key,
+                &preferences,
+                force.unwrap_or(false),
+            )
+        })();
+        state.online_runtime().finish_translation(&article_id);
+        if let Err(error) = &result {
+            let status = if error.code == "networkCancelled" {
+                "cancelled"
+            } else {
+                "error"
+            };
+            mobile_online::emit_progress(&app, &article_id, 0, 0, status, Some(error.message));
+        }
+        result
+    })
+    .await
+    .map_err(|_| PlatformError::storage_unavailable())?
 }
 
 #[tauri::command]
@@ -94,7 +163,7 @@ pub fn cancel_mobile_translation(
     state: tauri::State<'_, PlatformState>,
     article_id: String,
 ) -> Result<(), PlatformError> {
-    if let Some(request_id) = state.online_runtime().translation_request(&article_id)? {
+    if let Some(request_id) = state.online_runtime().cancel_translation(&article_id)? {
         mobile_online::cancel_network(&app, &request_id);
     }
     Ok(())

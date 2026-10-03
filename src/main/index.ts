@@ -26,8 +26,8 @@ import { LibraryService } from './library-service'
 import { SecretStore } from './secret-store'
 import {
   TranslationService,
-  createDefaultTranslationProviderRegistry,
 } from './translation-service'
+import { DesktopTranslationProviderRegistry } from './desktop-translation-models'
 import { PublicationFormatRegistry } from '../core/importing/publication-formats'
 import { DictionaryService } from './dictionary-service'
 import { PortableDataService } from './portable-data-service'
@@ -96,7 +96,7 @@ async function bootstrap(): Promise<void> {
   const library = new LibraryService(database, importFormats, userDataPath, emitImportProgress)
   const sourceCleanup = await library.removeRetainedSources()
   await diagnosticLogger.log('info', 'library', 'parsed-only-source-cleanup', sourceCleanup)
-  const translationProviders = createDefaultTranslationProviderRegistry()
+  const translationProviders = new DesktopTranslationProviderRegistry()
   const speechProviders = createDefaultSpeechProviderRegistry()
   const speechCache = new SpeechAudioCache(userDataPath)
   const speechSynthesis = new SpeechSynthesisService(

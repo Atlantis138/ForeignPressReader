@@ -26,7 +26,7 @@ export interface ModelSelectionIdentity {
   cacheModel: string
 }
 
-interface SourceSegment {
+export interface SourceSegment {
   id: string
   type: string
   text: string
@@ -166,6 +166,52 @@ export class TranslationService implements TranslationProvider {
       providerId: provider.id,
       modelId: model.id,
       cacheModel: translationCacheModel(provider, model),
+    }
+  }
+
+  async translateSegments(
+    title: string,
+    segments: SourceSegment[],
+    preferences: TranslationPreferences,
+    signal: AbortSignal,
+    onSegment: (id: string, text: string) => void,
+  ): Promise<void> {
+    const { provider, model } = this.providers.resolve(preferences)
+    try {
+      const apiKey = await this.secrets.getApiKey(provider.id)
+      if (signal.aborted) throw new Error('翻译已取消')
+      if (!apiKey) throw new Error(`请先在设置中填写 ${provider.name} API Key`)
+      const batches = makeBatches(segments, model)
+      while (batches.length) {
+        let remaining = batches.shift()!
+        for (let round = 0; round < 3 && remaining.length; round++) {
+          let translated: ApiSegment[]
+          try {
+            translated = await this.requestBatch(provider, model, apiKey, title, '刊物目录', remaining, signal)
+          } catch (error) {
+            if (error instanceof TruncatedCompletionError && remaining.length > 1) {
+              const middle = Math.ceil(remaining.length / 2)
+              batches.unshift(remaining.slice(middle))
+              remaining = remaining.slice(0, middle)
+              round = -1
+              continue
+            }
+            throw error
+          }
+          if (signal.aborted) throw new Error('翻译已取消')
+          const received = new Set<string>()
+          for (const item of translated) {
+            if (!remaining.some(source => source.id === item.blockId) || received.has(item.blockId) || !item.translation.trim()) continue
+            onSegment(item.blockId, item.translation.trim())
+            received.add(item.blockId)
+          }
+          remaining = remaining.filter(source => !received.has(source.id))
+        }
+        if (remaining.length) throw new Error(`模型未返回 ${remaining.length} 项目录译文，请重试`)
+      }
+    } catch (error) {
+      if (signal.aborted) throw new Error('翻译已取消')
+      throw new Error(safeErrorMessage(error, provider.name))
     }
   }
 

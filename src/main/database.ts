@@ -43,11 +43,9 @@ import type {
   PortableUserData,
 } from '../core/portable-data'
 import { compareVersionedRecord } from '../core/portable-data'
-import {
-  createDefaultTranslationProviderRegistry,
-  translationCacheModel,
-} from '../core/translation-providers'
+import { translationCacheModel } from '../core/translation-providers'
 import { TRANSLATION_PROMPT_VERSION } from '../core/translation-service'
+import { DesktopTranslationModels, DesktopTranslationProviderRegistry } from './desktop-translation-models'
 import { createDefaultSpeechProviderRegistry } from '../core/speech-providers'
 import type { VocabularyContext } from '../core/lexicon/ports'
 import { AppDatabase } from './sqlite-database'
@@ -92,7 +90,7 @@ const DEFAULT_LIBRARY_MANAGEMENT: LibraryManagementRecord = {
   items: {},
 }
 
-const translationProviders = createDefaultTranslationProviderRegistry()
+const translationProviders = new DesktopTranslationProviderRegistry()
 const speechProviders = createDefaultSpeechProviderRegistry()
 
 export class SqliteApplicationRepository {
@@ -746,6 +744,8 @@ export class SqliteApplicationRepository {
   }
 
   getTranslationPreferences(): TranslationPreferences {
+    const local = this.desktopTranslationModels().read().selected
+    if (local) return translationProviders.normalize(local)
     const row = this.db.prepare("SELECT value FROM settings WHERE key = 'translation.preferences'").get() as Row | undefined
     if (!row) return translationProviders.normalize(null)
     try {
@@ -758,12 +758,25 @@ export class SqliteApplicationRepository {
   saveTranslationPreferences(preferences: TranslationPreferences): TranslationPreferences {
     translationProviders.resolve(preferences)
     const value = translationProviders.normalize(preferences)
-    this.db.prepare(`
-      INSERT INTO settings (key, value, updated_at, device_id) VALUES ('translation.preferences', ?, ?, ?)
-      ON CONFLICT(key) DO UPDATE SET
-        value = excluded.value, updated_at = excluded.updated_at, device_id = excluded.device_id
-    `).run(JSON.stringify(value), new Date().toISOString(), this.deviceId)
+    this.db.exec('SAVEPOINT desktop_translation_preferences')
+    try {
+      if (!this.desktopTranslationModels().save(value)) {
+        this.db.prepare(`
+          INSERT INTO settings (key, value, updated_at, device_id) VALUES ('translation.preferences', ?, ?, ?)
+          ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value, updated_at = excluded.updated_at, device_id = excluded.device_id
+        `).run(JSON.stringify(value), new Date().toISOString(), this.deviceId)
+      }
+      this.db.exec('RELEASE desktop_translation_preferences')
+    } catch (error) {
+      this.db.exec('ROLLBACK TO desktop_translation_preferences; RELEASE desktop_translation_preferences')
+      throw error
+    }
     return value
+  }
+
+  desktopTranslationModels(): DesktopTranslationModels {
+    return new DesktopTranslationModels(this.db, this.deviceId)
   }
 
   getDictionaryPreferences(): DictionaryPreferences {

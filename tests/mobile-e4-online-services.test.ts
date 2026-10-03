@@ -25,6 +25,27 @@ describe('Android E4 online and system service boundary', () => {
       ['translate_mobile_article', { articleId: 'article', force: true }],
     ])
   })
+  it('connects contents, custom models and the selected connection test through native commands', async () => {
+    const calls: unknown[] = []
+    const client = new TauriMobileTranslationClient(async <T>(command: string, args?: Record<string, unknown>) => {
+      calls.push([command, args]); return undefined as T
+    })
+    const preferences = { providerId: 'openai', modelId: 'custom/model:1' }
+    await client.getContents('publication')
+    await client.translateContents('publication', true)
+    await client.cancelContents('publication')
+    await client.deleteModel(preferences)
+    await client.testConnection(preferences)
+    expect(calls).toEqual([
+      ['get_mobile_contents_translation', { publicationId: 'publication' }],
+      ['translate_mobile_contents', { publicationId: 'publication', force: true }],
+      ['cancel_mobile_translation', { articleId: 'publication' }],
+      ['delete_mobile_translation_model', { preferences }],
+      ['get_mobile_translation_settings', undefined],
+      ['test_mobile_translation_connection', { preferences }],
+    ])
+  })
+
   it('keeps renderer clients on versioned logical commands', async () => {
     expect(MOBILE_ONLINE_SERVICES_CONTRACT_VERSION).toBe(1)
     expectTypeOf<TauriMobileTranslationClient>().toMatchTypeOf<MobileTranslationClient>()

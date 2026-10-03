@@ -1,0 +1,53 @@
+{
+  "publication": {
+    "id": "publication_cache_vector",
+    "title": "Weekly / 国际 🌏",
+    "sections": [
+      {
+        "id": "section_world",
+        "title": "World",
+        "articles": [
+          {
+            "id": "article_one",
+            "title": "A changing world",
+            "rubric": "An outlook"
+          }
+        ]
+      }
+    ],
+    "unsectionedArticles": [
+      {
+        "id": "opening",
+        "title": "Editor’s note",
+        "rubric": null
+      }
+    ]
+  },
+  "preferences": {
+    "providerId": "openai",
+    "modelId": "custom/model:1"
+  },
+  "segments": [
+    [
+      "section_world",
+      "heading",
+      "World"
+    ],
+    [
+      "opening",
+      "title",
+      "Editor’s note"
+    ],
+    [
+      "article_one",
+      "title",
+      "A changing world"
+    ],
+    [
+      "article_one:rubric",
+      "rubric",
+      "An outlook"
+    ]
+  ],
+  "key": "14403dfa8b5ccf9d0ff0bc0b9a966a63ac8038e03589c6b64d5bb54f98e5d73a"
+}
