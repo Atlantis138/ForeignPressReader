@@ -36,6 +36,31 @@ const libraryState: LibraryState = {
 }
 
 describe('TauriMobileReadingClient', () => {
+  it('receives native online download progress and cleans listeners after cancellation', async () => {
+    let callback: (progress: import('../src/shared/types').ImportProgress & {requestId:string})=>void = ()=>{}
+    let finish: (value: unknown)=>void = ()=>{}
+    let requestId = ''
+    const calls: string[]=[]
+    let unlistened=false
+    const client = new TauriMobileReadingClient(async <T>(command:string,args?:Record<string,unknown>):Promise<T>=>{
+      calls.push(command)
+      if(command==='begin_online_epub_import') { requestId=String(args?.requestId); return new Promise(resolve=>{finish=value=>resolve(value as T)}) }
+      return undefined as T
+    },undefined,async fn=>{callback=fn;return ()=>{unlistened=true}})
+    const progress: string[]=[]
+    client.onImportProgress(value=>progress.push(value.message??''))
+    const pending=client.library.importOnlineIssue('a'.repeat(40))
+    await new Promise(resolve=>setTimeout(resolve,0))
+    callback({requestId,stage:'downloading',completed:10,total:100,message:'10% downloaded'})
+    callback({requestId:'unrelated',stage:'downloading',completed:50,total:100,message:'unrelated'})
+    expect(progress).toContain('10% downloaded');expect(progress).not.toContain('unrelated')
+    await client.cancelImport()
+    finish({kind:'ready',sessionId:'late-session',displayName:'sample.epub',bytes:100,entries:[],contentHash:'b'.repeat(64)})
+    await expect(pending).resolves.toBeNull()
+    expect(unlistened).toBe(true)
+    expect(calls.filter(command=>command==='cancel_epub_import')).toHaveLength(2)
+    expect(calls).not.toContain('commit_epub_import')
+  })
   it('maps the mobile reading slice to narrow commands and handles native de-duplication', async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> = []
     const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {

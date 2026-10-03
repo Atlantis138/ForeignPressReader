@@ -1,5 +1,6 @@
 import { PublicationView, type ContentsSnapshot } from './reader/PublicationView'
 import { ArticleSearch } from './reader/ReadingTools'
+import { OnlineIssuesDialog } from './online/OnlineIssuesDialog'
 import { usePreferenceWriter } from './use-preference-writer'
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -218,7 +219,7 @@ export function App() {
   useEffect(() => appClient.library.onImportProgress((progress) => {
     setImportProgress(progress)
     if (['completed', 'cancelled', 'error'].includes(progress.stage)) {
-      window.setTimeout(() => setImportProgress(null), 1200)
+      window.setTimeout(() => setImportProgress(current => current === progress ? null : current), 1200)
     }
   }), [])
 
@@ -355,6 +356,7 @@ function LibraryView({
   const { publications, categories, preferences } = state
   const [searchOpen, setSearchOpen] = useState(false)
   const searchTrigger = useRef<HTMLButtonElement>(null)
+  const [onlineOpen, setOnlineOpen] = useState(false)
   const [selectionMode, setSelectionMode] = useState(snapshot.selectionMode)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(snapshot.selectedIds))
   const [newCategoryName, setNewCategoryName] = useState(snapshot.newCategoryName)
@@ -481,7 +483,7 @@ function LibraryView({
     <section className="page library-page">
       <header className="page-header">
         <div><p className="eyebrow">LIBRARY</p><h1>我的书库</h1><p>分类、整理并阅读你的英文刊物。</p></div>
-        <button className="primary-button button-with-icon" onClick={onImport}><PlusIcon />导入刊物</button>
+        <div className="library-header-actions"><button className="secondary-button" onClick={() => setOnlineOpen(true)}>在线刊物</button><button className="primary-button button-with-icon" onClick={onImport}><PlusIcon />导入刊物</button></div>
       </header>
       {publications.length === 0 ? (
         <div className="empty-state">
@@ -548,6 +550,7 @@ function LibraryView({
           </div>
         </div>
       )}
+      {onlineOpen && <OnlineIssuesDialog library={appClient.library} publications={publications} onState={onState} onOpen={onOpen} onClose={() => setOnlineOpen(false)} />}
       {renameTarget && <div className="modal-backdrop"><form className="library-rename-dialog" onSubmit={(event) => { event.preventDefault(); void confirmPublicationRename() }}><h2>重命名书籍</h2><p>原始刊物标题会保留，新的名称仅用于你的书库。</p><label>书名<input autoFocus maxLength={200} value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /></label><div className="button-row"><button type="button" onClick={() => setRenameTarget(null)}>取消</button><button type="submit" className="primary-button" disabled={working || !renameDraft.trim() || renameDraft.trim() === renameTarget.title}>{working ? '保存中…' : '保存名称'}</button></div></form></div>}
       {categoryRenameTarget && <div className="modal-backdrop"><form className="library-rename-dialog" onSubmit={(event) => { event.preventDefault(); void confirmCategoryRename() }}><h2>重命名分类</h2><label>分类名称<input autoFocus maxLength={100} value={categoryRenameDraft} onChange={(event) => setCategoryRenameDraft(event.target.value)} /></label><div className="button-row"><button type="button" onClick={() => setCategoryRenameTarget(null)}>取消</button><button type="submit" className="primary-button" disabled={working || !categoryRenameDraft.trim() || categoryRenameDraft.trim() === categoryRenameTarget.name}>{working ? '保存中…' : '保存名称'}</button></div></form></div>}
     </section>

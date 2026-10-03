@@ -104,6 +104,7 @@ pub struct PlatformState {
     database: Mutex<AndroidDatabase>,
     logger: Mutex<DiagnosticLogger>,
     imports: Mutex<EpubImportManager>,
+    catalog_runtime: crate::online_catalog::CatalogRuntime,
     portable_request: Mutex<Option<String>>,
     dictionary_runtime: DictionaryRuntime,
     online_runtime: OnlineServiceRuntime,
@@ -144,6 +145,7 @@ impl PlatformState {
             database: Mutex::new(database),
             logger: Mutex::new(logger),
             imports: Mutex::new(imports),
+            catalog_runtime: crate::online_catalog::CatalogRuntime::default(),
             portable_request: Mutex::new(None),
             dictionary_runtime: DictionaryRuntime::default(),
             online_runtime: OnlineServiceRuntime::default(),
@@ -167,6 +169,10 @@ impl PlatformState {
         self.imports
             .lock()
             .map_err(|_| PlatformError::new("internal", "EPUB 导入服务暂时不可用。", true))
+    }
+
+    pub fn catalog_runtime(&self) -> &crate::online_catalog::CatalogRuntime {
+        &self.catalog_runtime
     }
 
     pub fn begin_portable_request(&self, request_id: String) -> Result<(), PlatformError> {

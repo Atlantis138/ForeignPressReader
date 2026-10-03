@@ -11,6 +11,7 @@ export const DictionaryIcon = (props: IconProps) => <Icon {...props}><path d="M4
 export const StudyIcon = (props: IconProps) => <Icon {...props}><path d="m3 8.5 9-4.5 9 4.5-9 4.5z"/><path d="M7 11v4.5c2.8 2 7.2 2 10 0V11M21 9v6"/></Icon>
 export const SettingsIcon = (props: IconProps) => <Icon {...props}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></Icon>
 export const SearchIcon = (props: IconProps) => <Icon {...props}><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></Icon>
+export const DownloadIcon = (props: IconProps) => <Icon {...props}><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></Icon>
 export const PlusIcon = (props: IconProps) => <Icon {...props}><path d="M12 5v14M5 12h14"/></Icon>
 export const ArrowLeftIcon = (props: IconProps) => <Icon {...props}><path d="m14.5 5-7 7 7 7M8 12h11"/></Icon>
 export const ChevronRightIcon = (props: IconProps) => <Icon {...props}><path d="m9 5 7 7-7 7"/></Icon>

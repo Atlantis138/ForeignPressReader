@@ -2,6 +2,8 @@ use super::*;
 
 #[test]
 fn facade_exports_every_registered_command() {
+    let _ = get_online_catalog;
+    let _ = begin_online_epub_import;
     let _ = get_mobile_dictionary_status;
     let _ = get_mobile_dictionary_center_status;
     let _ = preflight_mobile_dictionary_install;

@@ -23,6 +23,7 @@ import type {
 import { SqliteApplicationRepository } from './database'
 import { EpubImporter } from './epub-importer'
 import { LibraryService } from './library-service'
+import { OnlineCatalogService } from './online-catalog-service'
 import { SecretStore } from './secret-store'
 import {
   TranslationService,
@@ -94,6 +95,7 @@ async function bootstrap(): Promise<void> {
     importer: new EpubImporter(),
   }])
   const library = new LibraryService(database, importFormats, userDataPath, emitImportProgress)
+  const onlineCatalog = new OnlineCatalogService(network, library, database, userDataPath, emitImportProgress)
   const sourceCleanup = await library.removeRetainedSources()
   await diagnosticLogger.log('info', 'library', 'parsed-only-source-cleanup', sourceCleanup)
   const translationProviders = new DesktopTranslationProviderRegistry()
@@ -156,7 +158,7 @@ async function bootstrap(): Promise<void> {
   registerApplicationIpc(
     ipcMain, mainWindow, process.env.VITE_DEV_SERVER_URL,
     library, database, secrets, translator, translationProviders, speechSynthesis, speechProviders,
-    dictionaryService, vocabulary, study, portableDataService, storage, lanSyncService, developer, userDataPath,
+    dictionaryService, vocabulary, study, portableDataService, storage, lanSyncService, developer, userDataPath, onlineCatalog,
   )
 }
 

@@ -21,6 +21,7 @@ pub mod mobile_study;
 pub mod mobile_sync;
 pub mod mobile_sync_runtime;
 pub mod mobile_vocabulary;
+pub mod online_catalog;
 pub mod platform_error;
 pub mod platform_paths;
 mod platform_state;
@@ -215,6 +216,8 @@ pub fn run() {
             commands::reset_mobile_study_progress,
             commands::force_mobile_next_study_day,
             commands::begin_epub_import,
+            commands::get_online_catalog,
+            commands::begin_online_epub_import,
             commands::read_epub_text_entry,
             commands::commit_epub_import,
             commands::cancel_epub_import,

@@ -1,0 +1,56 @@
+.online-issues-backdrop { position: fixed; inset: 0; z-index: 150; display: grid; place-items: center; padding: 24px; background: #0008; color: var(--ink); font-family: var(--font-ui); }
+.online-issues-dialog { width: min(760px, 100%); max-height: calc(100dvh - 48px); display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); box-shadow: 0 20px 70px #0003; overflow: hidden; }
+.online-issues-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 28px 18px; border-bottom: 1px solid var(--line); }
+.online-issues-header h2 { margin: 4px 0 8px; font-size: 26px; }
+.online-issues-header p { margin: 0; color: var(--muted); font-size: 13px; }
+.online-issues-header .online-issues-eyebrow { color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.online-issues-content { overflow: auto; overscroll-behavior: contain; padding: 18px 28px 24px; }
+.online-issues-dialog button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--ink); font: 600 13px var(--font-ui); cursor: pointer; }
+.online-issues-dialog button:hover:not(:disabled) { background: var(--canvas); border-color: var(--line-strong); }
+.online-issues-dialog button:disabled { opacity: .5; cursor: default; }
+.online-issues-dialog button:focus-visible, .online-issues-dialog select:focus-visible, .online-issues-dialog input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.online-issues-dialog button svg { width: 18px; height: 18px; }
+.online-issues-dialog .online-issues-icon { flex: 0 0 40px; width: 40px; padding: 0; border-color: transparent; color: var(--muted); }
+.online-issues-toolbar, .online-issues-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.online-issues-toolbar > span { min-width: 0; overflow-wrap: anywhere; font-size: 11px; color: var(--muted); }
+.online-issues-toolbar button { flex-shrink: 0; }
+.online-issues-recent { padding: 18px; margin: 16px 0 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--canvas); }
+.online-issues-recent > div { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
+.online-issues-dialog h3 { font-size: 16px; margin: 0; }
+.online-issues-dialog label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.online-issues-dialog select, .online-issues-dialog input { min-width: 0; min-height: 38px; max-width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; }
+.online-issues-recent p { margin: 12px 0 16px; color: var(--muted-strong); font-size: 13px; line-height: 1.6; }
+.online-issues-dialog .online-issues-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.online-issues-dialog .online-issues-primary:hover:not(:disabled) { background: var(--accent-dark); }
+.online-issues-list { padding: 0; margin: 12px 0 0; list-style: none; }
+.online-issues-list li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 16px 0; border-top: 1px solid var(--line); }
+.online-issues-list li > div { min-width: 0; }
+.online-issues-list strong { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 16px; font-variant-numeric: tabular-nums; }
+.online-issues-list small { font: 500 10px var(--font-ui); color: var(--accent); }
+.online-issues-list span { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
+.online-issues-list .downloaded span { color: var(--success); }
+.online-issues-list button { flex-shrink: 0; }
+.online-issues-dialog .online-issues-error { color: var(--danger); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.online-issues-error button { margin-left: 8px; }
+.online-issues-notice { padding: 12px; border-radius: 8px; background: var(--warning-soft); color: var(--muted-strong); font-size: 13px; line-height: 1.6; }
+.online-issues-progress { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; padding: 16px; margin-bottom: 18px; border: 1px solid var(--line); border-radius: 8px; }
+.online-issues-progress b { font-size: 13px; }
+.online-issues-progress span { grid-column: 1; font-size: 12px; color: var(--muted); }
+.online-issues-progress button { grid-column: 2; grid-row: 1 / 4; }
+.online-issues-progress progress { grid-column: 1; width: 100%; height: 7px; accent-color: var(--accent); }
+.online-issues-filters { display: flex; gap: 12px; margin: 16px 0; }
+.online-issues-filters label { min-width: 0; }
+.online-issues-footnote { color: var(--muted); font-size: 11px; line-height: 1.7; margin: 20px 0 0; }
+.online-issues-more { width: 100%; }
+.library-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+@media (max-width: 600px) {
+  .online-issues-backdrop { padding: 10px; }
+  .online-issues-dialog { max-height: calc(100dvh - 20px); border-radius: 12px; }
+  .online-issues-header { padding: 18px 16px 14px; }
+  .online-issues-content { padding: 14px 16px 18px; }
+  .online-issues-dialog button { min-height: 44px; padding: 8px 10px; font-size: 12px; }
+  .online-issues-header h2 { font-size: 23px; }
+  .online-issues-recent { padding: 14px; }
+  .online-issues-filters { flex-wrap: wrap; }
+  .online-issues-filters label { flex: 1 1 100px; }
+}

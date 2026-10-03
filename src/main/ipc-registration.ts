@@ -48,6 +48,7 @@ import { requireModelId } from './desktop-translation-models'
 import { ContentsTranslationService } from './contents-translation-service'
 import { FileContentsCache } from './contents-cache'
 import { appCachePath } from './app-cache'
+import type { OnlineCatalogService } from './online-catalog-service'
 
 export function registerApplicationIpc(
   ipcMain: Pick<IpcMain, 'handle'>,
@@ -68,6 +69,7 @@ export function registerApplicationIpc(
   lanSync: LanSyncService,
   developer: DeveloperService,
   userDataPath: string,
+  onlineCatalog: OnlineCatalogService,
 ): void {
   const contents = new ContentsTranslationService(translator, id => db.getPublication(id),
     () => db.getTranslationPreferences(), progress => {
@@ -88,7 +90,17 @@ export function registerApplicationIpc(
   })
   ipcMain.handle('library:cancelImport', (event) => {
     assertTrustedSender(event.senderFrame?.url ?? '')
-    library.cancelImport()
+    onlineCatalog.cancelImport()
+  })
+  ipcMain.handle('library:getOnlineCatalog', (event, refresh: unknown) => {
+    assertTrustedSender(event.senderFrame?.url ?? '')
+    if (refresh !== undefined && typeof refresh !== 'boolean') throw new Error('刷新参数无效')
+    return onlineCatalog.getCatalog(refresh === true)
+  })
+  ipcMain.handle('library:importOnlineIssue', (event, issueId: unknown) => {
+    assertTrustedSender(event.senderFrame?.url ?? '')
+    if (typeof issueId !== 'string') throw new Error('期刊编号无效')
+    return onlineCatalog.importIssue(issueId)
   })
   ipcMain.handle('library:listPublications', (event) => {
     assertTrustedSender(event.senderFrame?.url ?? '')

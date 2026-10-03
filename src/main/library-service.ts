@@ -29,16 +29,23 @@ export class LibraryService {
   }
 
   async importFile(sourceFile: string): Promise<ImportResult> {
+    return this.importPreparedFile(async () => sourceFile)
+  }
+
+  async importPreparedFile(prepare: (signal: AbortSignal) => Promise<string>): Promise<ImportResult> {
     if (this.importController) throw new Error('已有刊物正在导入')
-    const format = this.formats.resolve(sourceFile)
     const controller = new AbortController()
     this.importController = controller
-    this.activeFormat = format
+    let format: PublicationFormatAdapter | null = null
     let finalRoot: string | null = null
     let stagingRoot: string | null = null
     let parsedHash: string | null = null
     let ownsFinalRoot = false
     try {
+      const sourceFile = await prepare(controller.signal)
+      this.throwIfCancelled(controller)
+      format = this.formats.resolve(sourceFile)
+      this.activeFormat = format
       const stat = await fs.promises.stat(sourceFile)
       if (!stat.isFile()) throw new Error('请选择出版物文件')
       if (stat.size > format.maxBytes) {
@@ -47,8 +54,9 @@ export class LibraryService {
       this.emit('reading', 0, stat.size, '正在读取出版物')
       this.throwIfCancelled(controller)
       this.emit('parsing', stat.size, stat.size, `正在解析 ${format.name} 结构与来源规则`)
-      const fileImporter = format.importer as typeof format.importer & {
-        parseFile?: (filePath: string) => Promise<Awaited<ReturnType<typeof format.importer.parse>>>
+      const importer = format.importer
+      const fileImporter = importer as typeof importer & {
+        parseFile?: (filePath: string) => Promise<Awaited<ReturnType<typeof importer.parse>>>
       }
       const parsed = fileImporter.parseFile
         ? await fileImporter.parseFile(sourceFile)

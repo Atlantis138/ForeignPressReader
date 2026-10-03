@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArticleSearch } from '../reader/ReadingTools'
+import { OnlineIssuesDialog } from '../online/OnlineIssuesDialog'
 import type {
   LibraryPreferences,
   LibraryState,
@@ -78,6 +79,7 @@ export function MobileLibrary({
 }) {
   const selected = useMemo(() => new Set(selection.selectedIds), [selection.selectedIds])
   const [searchOpen, setSearchOpen] = useState(false)
+  const [onlineOpen, setOnlineOpen] = useState(false)
   const [actionTarget, setActionTarget] = useState<PublicationSummary | null>(null)
   const [renameTarget, setRenameTarget] = useState<PublicationSummary | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -91,9 +93,10 @@ export function MobileLibrary({
   const [working, setWorking] = useState(false)
   const visible = useMemo(() => visibleLibraryPublications(state), [state])
   const [renderLimit, setRenderLimit] = useState(() => deferOffscreenCards ? LIBRARY_INITIAL_CARD_COUNT : Number.POSITIVE_INFINITY)
-  const overlayOpen = Boolean(actionTarget || renameTarget || assignIds || deleteIds || sortOpen || categoriesOpen || deleteCategoryId)
+  const overlayOpen = Boolean(onlineOpen || actionTarget || renameTarget || assignIds || deleteIds || sortOpen || categoriesOpen || deleteCategoryId)
 
   const closeOverlays = useCallback(() => {
+    setOnlineOpen(false)
     setActionTarget(null)
     setRenameTarget(null)
     setAssignIds(null)
@@ -158,7 +161,7 @@ export function MobileLibrary({
   }
 
   return <div className="mobile-page library-page">
-    <PageHeader eyebrow="LIBRARY" title="我的书库" description="分类、整理并阅读你的英文刊物。" action={<MobileButton variant="primary" onClick={onImport}><PlusIcon /> 导入刊物</MobileButton>} />
+    <PageHeader eyebrow="LIBRARY" title="我的书库" description="分类、整理并阅读你的英文刊物。" action={<div className="library-header-actions"><MobileButton onClick={() => setOnlineOpen(true)}>在线刊物</MobileButton><MobileButton variant="primary" onClick={onImport}><PlusIcon /> 导入刊物</MobileButton></div>} />
     {state.publications.length === 0 ? (
       <EmptyState symbol="外" title="从一本外刊开始" description="选择无 DRM EPUB；原文件只用于一次性导入，不会保存在应用内。" action={<MobileButton variant="primary" onClick={onImport}>导入第一本刊物</MobileButton>} />
     ) : <>
@@ -204,6 +207,7 @@ export function MobileLibrary({
       )}
     </>}
 
+    {onlineOpen && <OnlineIssuesDialog library={client.library} publications={state.publications} onState={onState} onOpen={onOpen} onClose={() => setOnlineOpen(false)} />}
     {actionTarget && <BottomSheet title={actionTarget.title} onClose={() => setActionTarget(null)}><div className="library-action-sheet">
       <MobileButton onClick={() => { onSelection(enterLibrarySelection(actionTarget.id)); setActionTarget(null) }}><GridIcon /> 选择刊物</MobileButton>
       <MobileButton onClick={() => beginRename(actionTarget)}><EditIcon /> 重命名</MobileButton>

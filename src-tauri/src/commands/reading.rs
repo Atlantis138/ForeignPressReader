@@ -156,6 +156,7 @@ pub fn cancel_epub_import(
     state: tauri::State<'_, PlatformState>,
     request_or_session_id: String,
 ) -> Result<(), PlatformError> {
+    state.catalog_runtime().cancel(&request_or_session_id);
     #[cfg(target_os = "android")]
     {
         use fpr_platform_plugin::FoundationExt;

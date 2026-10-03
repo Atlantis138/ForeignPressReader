@@ -4,6 +4,8 @@
 
 ### Added
 
+- Windows/Android 书库新增“在线刊物”，直接读取 `hehonghui/awesome-english-ebooks/01_economist`。默认检查最近 8 期，可选 4/12 期，一键顺序下载本地缺刊；手动导入、重命名后的已有期刊自动跳过。支持单期下载并阅读、停止批量任务、逐期失败重试，以及折叠的历史年份/日期筛选。
+- 期刊目录保留一小时本机缓存，支持手动检查更新和断网回看列表；按目录对应的固定 Git revision 下载，复用正式 EPUB 导入校验，结束后清除临时文件。两端共用交互与路径兼容向量，不改变数据库、备份和同步格式。
 - Windows/Android 目录新增栏目、文章标题与摘要翻译，支持显示/隐藏、取消、失败续译和重新翻译；结果按目录内容、模型和提示词版本保存在本机磁盘缓存，重启后可复用。长目录进入文章或切换主页面后可恢复滚动位置。
 - Windows/Android 翻译设置支持填写、保存和删除按供应商区分的自定义模型 ID；自定义服务配置只保存在本机，不进入便携备份或局域网同步，兼容此前的 Windows 本机配置。
 - Windows/Android 新增每篇文章独立的持久阅读位置、书签、已读状态与分页全文检索。FTS 索引可从正文重建，用户阅读记录随备份和同步保留。
@@ -47,10 +49,12 @@
 
 ### Tests
 
+- 在线刊物覆盖跨 TypeScript/Rust 路径向量、缓存与离线回退、已有期刊识别、受限下载、取消及临时文件清理、批量缺刊选择/部分失败重试、Android 进度和取消竞态；完整验证见 [在线刊物验证](docs/online-issues-2026-10.md)。
 - 新增 Windows/Android 共享 v3 数据库与 Sync Model 向量，以及全同步记录族往返、计划删除、全局重置、细粒度书库墓碑、刊物恢复阅读位置、format v2 升级、迁移失败回滚、恶意刊物 ID 和接收后 UI 刷新的回归测试。
 
 ### Verification
 
+- 2026-10-03 在线刊物：完整 TypeScript 272 项通过（3 项跳过）、Rust 98 项通过（1 项忽略）、类型/lint/Clippy、Android ARM64 编译及 Windows 打包检查通过。真实下载最新一期并解析 93 篇文章，360/390 px 深浅主题检查通过；已覆盖安装 Windows，安装前后数据库未变。详见 [在线刊物验证](docs/online-issues-2026-10.md)。
 - 2026-10-03 Windows x64 `pnpm dist` 与打包协议检查通过；按用户请求覆盖安装到原用户级目录，安装文件与本次构建一致，启动前原数据库校验值未变，已启动新版应用。版本号仍为 1.0.0，详见 [双端对齐验证](docs/cross-platform-parity-2026-10.md)。
 - 2026-10 双端目录缓存与功能对齐：类型/lint、完整 TypeScript 260 项（3 项跳过）、Rust 94 项（1 项忽略）、Clippy、Android ARM64 编译和跨运行时便携互操作通过；真实 Electron 重启缓存读回与移动窄屏/深色界面检查通过。范围及真机限制见 [双端对齐验证](docs/cross-platform-parity-2026-10.md)。
 - Windows 目录与翻译更新：`pnpm typecheck`、`pnpm lint`、`pnpm test` 通过，253 项通过、3 项按环境跳过；长目录返回位置、译文字号及自定义模型交互经 Electron 验证，详见 [验证记录](docs/desktop-translation-validation.md)。

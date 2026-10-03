@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   ArticleDetail,
   ImportProgress,
@@ -89,14 +90,19 @@ export class TauriMobileReadingClient implements MobileReadingClient {
     sessionId?: string
     worker?: Worker
     rejectParse?: (reason: unknown) => void
+    cancelled?: boolean
   } | null = null
 
   constructor(
     private readonly invokeCommand: InvokeFn = invoke,
     readonly services: MobileReaderServiceSlots = EMPTY_MOBILE_READER_SERVICES,
+    private readonly listenProgress: (callback: (progress: ImportProgress & { requestId: string }) => void) => Promise<UnlistenFn>
+      = callback => listen<ImportProgress & { requestId: string }>('online-import-progress', event => callback(event.payload)),
   ) {}
 
   readonly library: LibraryApi = {
+    getOnlineCatalog: (refresh = false) => this.invokeSafely('get_online_catalog', { refresh }),
+    importOnlineIssue: (issueId) => this.importPublication(issueId),
     importPublication: () => this.importPublication(),
     cancelImport: () => this.cancelImport(),
     onImportProgress: (callback) => this.onImportProgress(callback),
@@ -122,13 +128,23 @@ export class TauriMobileReadingClient implements MobileReadingClient {
     savePreferences: (preferences) => this.savePreferences(preferences),
   }
 
-  async importPublication(): Promise<ImportResult | null> {
+  async importPublication(issueId?: string): Promise<ImportResult | null> {
     if (this.active) throw new Error('已有刊物正在导入')
     const requestId = crypto.randomUUID()
     this.active = { requestId }
-    this.emit('reading', 0, 0, '请选择 EPUB 文件')
+    let unlisten: UnlistenFn | undefined
+    this.emit(issueId ? 'downloading' : 'reading', 0, 0, issueId ? '正在准备下载期刊' : '请选择 EPUB 文件')
     try {
-      const begin = await this.invokeSafely<BeginEpubImportResult>('begin_epub_import', { requestId })
+      if (issueId) unlisten = await this.listenProgress(progress => {
+        if (progress.requestId === requestId && this.active?.requestId === requestId) this.emit(progress.stage, progress.completed, progress.total, progress.message ?? '正在下载期刊')
+      })
+      if (this.active.cancelled) { this.emit('cancelled', 0, 0, '已取消导入'); return null }
+      const begin = await this.invokeSafely<BeginEpubImportResult>(issueId ? 'begin_online_epub_import' : 'begin_epub_import', issueId ? { requestId, issueId } : { requestId })
+      if (this.active.cancelled) {
+        await this.invokeSafely('cancel_epub_import', { requestOrSessionId: begin.kind === 'ready' ? begin.sessionId : requestId })
+        this.emit('cancelled', 0, 0, '已取消导入')
+        return null
+      }
       if (begin.kind === 'cancelled') {
         this.emit('cancelled', 0, 0, '已取消导入')
         return null
@@ -164,6 +180,7 @@ export class TauriMobileReadingClient implements MobileReadingClient {
       if (cancelled) return null
       throw error
     } finally {
+      unlisten?.()
       this.active?.worker?.terminate()
       this.active = null
     }
@@ -172,6 +189,7 @@ export class TauriMobileReadingClient implements MobileReadingClient {
   async cancelImport(): Promise<void> {
     const active = this.active
     if (!active) return
+    active.cancelled = true
     active.worker?.terminate()
     active.rejectParse?.({ code: 'importCancelled', message: 'EPUB 导入已取消。', retryable: false })
     await this.invokeSafely<void>('cancel_epub_import', {

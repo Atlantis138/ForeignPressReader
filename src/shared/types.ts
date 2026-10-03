@@ -1,4 +1,5 @@
 import type { ReaderManagementApi } from './reader-types'
+import type { OnlineCatalog } from './online-catalog'
 export type BlockType =
   | 'title'
   | 'rubric'
@@ -106,7 +107,7 @@ export interface ImportResult {
 }
 
 export interface ImportProgress {
-  stage: 'reading' | 'parsing' | 'writing' | 'completed' | 'cancelled' | 'error'
+  stage: 'downloading' | 'reading' | 'parsing' | 'writing' | 'completed' | 'cancelled' | 'error'
   completed: number
   total: number
   message?: string
@@ -707,6 +708,8 @@ export interface DeveloperState {
 }
 
 export interface LibraryApi {
+  getOnlineCatalog(refresh?: boolean): Promise<OnlineCatalog>
+  importOnlineIssue(issueId: string): Promise<ImportResult | null>
   importPublication(): Promise<ImportResult | null>
   cancelImport(): Promise<void>
   onImportProgress(callback: (progress: ImportProgress) => void): () => void

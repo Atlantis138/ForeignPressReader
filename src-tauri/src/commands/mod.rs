@@ -31,6 +31,7 @@ use tauri::Emitter;
 mod data_storage_developer;
 mod dictionary;
 mod model;
+mod online_catalog;
 mod online_speech;
 mod platform;
 mod reading;
@@ -60,6 +61,7 @@ pub use model::{
     MobileDictionaryCenterStatus, MobileDictionaryInstallResult, MobileDictionaryOnlineEnhancement,
     MobileLexemeSource, PlatformInfo,
 };
+pub use online_catalog::{begin_online_epub_import, get_online_catalog};
 pub use online_speech::{
     cancel_mobile_translation, delete_mobile_speech_api_key, delete_mobile_translation_api_key,
     delete_mobile_translation_model, get_mobile_contents_translation,
@@ -108,7 +110,8 @@ use platform::{
 pub(crate) use self::platform::{__cmd__get_platform_info, __tauri_command_name_get_platform_info};
 #[allow(unused_imports)]
 pub(crate) use self::{
-    data_storage_developer::*, dictionary::*, online_speech::*, reading::*, study::*, vocabulary::*,
+    data_storage_developer::*, dictionary::*, online_catalog::*, online_speech::*, reading::*,
+    study::*, vocabulary::*,
 };
 
 #[cfg(test)]

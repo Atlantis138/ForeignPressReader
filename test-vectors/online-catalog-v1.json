@@ -1,0 +1,14 @@
+{
+  "paths": [
+    { "path": "te_2026.10.03/TheEconomist.2026.10.03.epub", "date": "2026-10-03" },
+    { "path": "2025/te_2025.12.27/TheEconomist.2025.12.27.epub", "date": "2025-12-27" },
+    { "path": "te_2024.02.29/TheEconomist.2024.02.29.epub", "date": "2024-02-29" },
+    { "path": "te_2025.02.29/TheEconomist.2025.02.29.epub", "date": null },
+    { "path": "te_2026.10.03/TheEconomist.2026.09.26.epub", "date": null },
+    { "path": "../te_2026.10.03/TheEconomist.2026.10.03.epub", "date": null },
+    { "path": "2025/../te_2026.10.03/TheEconomist.2026.10.03.epub", "date": null },
+    { "path": "te_2026.10.03/TheEconomist.2026.10.03.epub?url=http://localhost", "date": null },
+    { "path": "te_2026.10.03/TheEconomist.2026.10.03.pdf", "date": null },
+    { "path": "te_2026.10.03\\TheEconomist.2026.10.03.epub", "date": null }
+  ]
+}

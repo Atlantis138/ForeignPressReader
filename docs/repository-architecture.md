@@ -2,7 +2,7 @@
 
 > 状态：正式仓库结构决策
 > 当前 Git 根目录：`<repo-root>`
-> 最后更新：2026-07-12
+> 最后更新：2026-10-03
 
 ## 1. 决策
 
@@ -115,6 +115,15 @@ ForeignPressReader/
 - 密钥、签名文件、用户数据库、真实 EPUB、ECDICT 数据包和诊断日志永不进入 Git。
 
 ## 8. 构建与验证矩阵
+
+### 在线刊物（2026-10）
+
+- `AppClient.library.getOnlineCatalog/importOnlineIssue` 是两个外壳的统一入口；renderer 共用 `OnlineIssuesDialog`，不直接访问 GitHub 或文件系统。最近缺刊优先，历史目录按需展开。
+- `src/core/online-catalog.ts` 负责纯 TypeScript 目录校验、固定来源 URL 和本地匹配规则。Electron 在 `OnlineCatalogService` 中使用系统代理感知的网络适配器；Android 在 Rust `online_catalog` 模块中获取目录和流式写入，之后继续既有共享 EPUB worker/原生提交链路。两端共用 `test-vectors/online-catalog-v1.json`。
+- 目录经分支 revision → 根 tree → `01_economist` tree 获取，下载固定在该 revision。只接受常规 EPUB blob、有效且目录/文件名一致的日期、64 MiB 以下文件；目录响应最大 2 MiB、最多 2,000 期。已下载长度必须与目录一致，后续 EPUB 完整性、路径和内容检查保持生效。
+- 本地已有期刊通过不可变的 `originalTitle` 日期匹配，包括手动导入、改名、备份恢复及同步得到的刊物；不新增“已下载”数据库记录。解析后的刊物沿用正式备份/同步规则。
+- 列表是可再生的一小时缓存，强制刷新失败时明确显示旧列表。临时下载与解析由原生端拥有并清理；取消不移除此前成功导入的刊物。没有后台定时检查或自动下载。
+- 交互、失败/取消测试及真实下载结果见 [在线刊物验证](online-issues-2026-10.md)。
 
 ### 双端目录缓存与模型配置（2026-10）
 

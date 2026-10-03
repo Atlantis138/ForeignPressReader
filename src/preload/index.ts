@@ -14,6 +14,8 @@ import type {
 
 const api: AppApi = {
   library: {
+    getOnlineCatalog: (refresh) => ipcRenderer.invoke('library:getOnlineCatalog', refresh),
+    importOnlineIssue: (issueId) => ipcRenderer.invoke('library:importOnlineIssue', issueId),
     importPublication: () => ipcRenderer.invoke('library:importPublication'),
     cancelImport: () => ipcRenderer.invoke('library:cancelImport'),
     onImportProgress: (callback) => {
